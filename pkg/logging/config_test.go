@@ -22,11 +22,14 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	. "knative.dev/pkg/configmap/testing"
+
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/system"
+
+	. "knative.dev/pkg/configmap/testing"
 	_ "knative.dev/pkg/system/testing"
 )
 
