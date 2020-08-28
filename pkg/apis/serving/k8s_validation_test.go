@@ -69,6 +69,13 @@ func withPodSpecTolerationsEnabled() configOption {
 	}
 }
 
+func withPodSpecRuntimeClassNameEnabled() configOption {
+	return func(cfg *config.Config) *config.Config {
+		cfg.Features.PodSpecRuntimeClassName = config.Enabled
+		return cfg
+	}
+}
+
 func withPodSpecSecurityContextEnabled() configOption {
 	return func(cfg *config.Config) *config.Config {
 		cfg.Features.PodSpecSecurityContext = config.Enabled
@@ -543,6 +550,8 @@ func TestPodSpecMultiContainerValidation(t *testing.T) {
 }
 
 func TestPodSpecFeatureValidation(t *testing.T) {
+	runtimeClassName := "test"
+
 	featureData := []struct {
 		name        string
 		featureSpec corev1.PodSpec
@@ -597,6 +606,16 @@ func TestPodSpecFeatureValidation(t *testing.T) {
 			Paths:   []string{"tolerations"},
 		},
 		cfgOpts: []configOption{withPodSpecTolerationsEnabled()},
+	}, {
+		name: "RuntimeClassName",
+		featureSpec: corev1.PodSpec{
+			RuntimeClassName: &runtimeClassName,
+		},
+		err: &apis.FieldError{
+			Message: "must not set the field(s)",
+			Paths:   []string{"runtimeClassName"},
+		},
+		cfgOpts: []configOption{withPodSpecRuntimeClassNameEnabled()},
 	}, {
 		name: "PodSpecSecurityContext",
 		featureSpec: corev1.PodSpec{
@@ -1513,7 +1532,7 @@ func TestVolumeValidation(t *testing.T) {
 		},
 		want: apis.ErrMultipleOneOf("configMap", "projected"),
 	}, {
-		name: "multiple project volume single source",
+		name: "multiple projected volumes single source",
 		v: corev1.Volume{
 			Name: "foo",
 			VolumeSource: corev1.VolumeSource{
