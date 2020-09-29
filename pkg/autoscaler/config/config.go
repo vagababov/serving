@@ -114,7 +114,7 @@ func validate(lc *autoscalerconfig.Config) (*autoscalerconfig.Config, error) {
 	}
 
 	if lc.ScaleDownDelay < 0 {
-		return nil, fmt.Errorf("scale-down-delay cannot be negative, was: %v", lc.ScaleDownDelay)
+		return nil, fmt.Errorf("scale-down-delay cannot be negative, was: ", lc.ScaleDownDelay)
 	}
 
 	if lc.ScaleDownDelay.Round(time.Second) != lc.ScaleDownDelay {
@@ -122,11 +122,11 @@ func validate(lc *autoscalerconfig.Config) (*autoscalerconfig.Config, error) {
 	}
 
 	if lc.ScaleToZeroPodRetentionPeriod < 0 {
-		return nil, fmt.Errorf("scale-to-zero-pod-retention-period cannot be negative, was: %v", lc.ScaleToZeroPodRetentionPeriod)
+		return nil, fmt.Errorf("scale-to-zero-pod-retention-period cannot be negative, was: ", lc.ScaleToZeroPodRetentionPeriod)
 	}
 
 	if lc.TargetBurstCapacity < 0 && lc.TargetBurstCapacity != -1 {
-		return nil, fmt.Errorf("target-burst-capacity must be either non-negative or -1 (for unlimited), was: %f", lc.TargetBurstCapacity)
+		return nil, fmt.Errorf("target-burst-capacity must be either non-negative or -1 (for unlimited), was: ", lc.TargetBurstCapacity)
 	}
 
 	if lc.ContainerConcurrencyTargetFraction <= 0 || lc.ContainerConcurrencyTargetFraction > 1 {

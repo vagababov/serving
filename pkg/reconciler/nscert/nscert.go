@@ -177,7 +177,7 @@ func wildcardDomain(tmpl, domain, namespace string) (string, error) {
 
 	dom := buf.String()
 	if !domainTemplateRegex.MatchString(dom) {
-		return "", fmt.Errorf("invalid DomainTemplate: %s", dom)
+		return "", fmt.Errorf("invalid DomainTemplate: ", dom)
 	}
 	return dom, nil
 }

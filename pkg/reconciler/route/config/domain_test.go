@@ -67,7 +67,7 @@ func TestNewConfigNoEntry(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Errorf("Unexpected error when config file has no entry: %v", err)
+		t.Errorf("Unexpected error when config file has no entry: ", err)
 	}
 	got := d.LookupDomainForLabels(nil)
 	if got != DefaultDomain {
@@ -119,10 +119,10 @@ func TestNewConfig(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+		t.Errorf("Unexpected error: ", err)
 	}
 	if diff := cmp.Diff(&expectedConfig, c); diff != "" {
-		t.Errorf("Unexpected config diff (-want +got): %s", diff)
+		t.Errorf("Unexpected config diff (-want +got): ", diff)
 	}
 }
 
@@ -187,9 +187,9 @@ func TestLookupDomainForLabels(t *testing.T) {
 func TestOurDomain(t *testing.T) {
 	cm, example := ConfigMapsFromTestFile(t, DomainConfigName)
 	if _, err := NewDomainFromConfigMap(cm); err != nil {
-		t.Errorf("NewDomainFromConfigMap(actual) = %v", err)
+		t.Errorf("NewDomainFromConfigMap(actual) = ", err)
 	}
 	if _, err := NewDomainFromConfigMap(example); err != nil {
-		t.Errorf("NewDomainFromConfigMap(example) = %v", err)
+		t.Errorf("NewDomainFromConfigMap(example) = ", err)
 	}
 }

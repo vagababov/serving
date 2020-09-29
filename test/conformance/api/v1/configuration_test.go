@@ -43,7 +43,7 @@ func TestUpdateConfigurationMetadata(t *testing.T) {
 
 	t.Logf("Creating new configuration %s", names.Config)
 	if _, err := v1test.CreateConfiguration(t, clients, names); err != nil {
-		t.Fatalf("Failed to create configuration %s", names.Config)
+		t.Fatalf("Failed to create configuration ", names.Config)
 	}
 
 	// Wait for the configuration to actually be ready to not race in the updates below.

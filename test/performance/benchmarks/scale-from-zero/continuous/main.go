@@ -65,7 +65,7 @@ const (
 func clientsFromConfig() (*test.Clients, error) {
 	cfg, err := sharedmain.GetConfig("", "")
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %v", err)
+		return nil, fmt.Errorf("error building kubeconfig: ", err)
 	}
 	return test.NewClientsFromConfig(cfg, testNamespace)
 }

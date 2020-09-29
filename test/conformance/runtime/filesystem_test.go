@@ -48,7 +48,7 @@ func testFiles(t *testing.T, clients *test.Clients, paths map[string]types.FileI
 	for path, file := range paths {
 		riFile, ok := ri.Host.Files[path]
 		if !ok {
-			return fmt.Errorf("runtime contract file info not present: %s", path)
+			return fmt.Errorf("runtime contract file info not present: ", path)
 		}
 
 		if file.Error != "" && file.Error != riFile.Error {

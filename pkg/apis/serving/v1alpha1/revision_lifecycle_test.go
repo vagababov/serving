@@ -262,7 +262,7 @@ func TestGetSetCondition(t *testing.T) {
 	rs.MarkResourcesAvailableTrue()
 
 	if diff := cmp.Diff(rc, rs.GetCondition(RevisionConditionResourcesAvailable), cmpopts.IgnoreFields(apis.Condition{}, "LastTransitionTime")); diff != "" {
-		t.Errorf("GetCondition refs diff (-want +got): %v", diff)
+		t.Errorf("GetCondition refs diff (-want +got): ", diff)
 	}
 
 	rc = &apis.Condition{
@@ -271,7 +271,7 @@ func TestGetSetCondition(t *testing.T) {
 		Severity: apis.ConditionSeverityError,
 	}
 	if diff := cmp.Diff(rc, rs.GetCondition(RevisionConditionReady), cmpopts.IgnoreFields(apis.Condition{}, "LastTransitionTime")); diff != "" {
-		t.Errorf("GetCondition ready diff (-want +got): %v", diff)
+		t.Errorf("GetCondition ready diff (-want +got): ", diff)
 	}
 }
 

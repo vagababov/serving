@@ -128,7 +128,7 @@ var _ reconciler.LeaderAware = (*reconcilerImpl)(nil)
 func NewReconciler(ctx context.Context, logger *zap.SugaredLogger, client versioned.Interface, lister autoscalingv1alpha1.PodAutoscalerLister, recorder record.EventRecorder, r Interface, classValue string, options ...controller.Options) controller.Reconciler {
 	// Check the options function input. It should be 0 or 1.
 	if len(options) > 1 {
-		logger.Fatalf("up to one options struct is supported, found %d", len(options))
+		logger.Fatalf("up to one options struct is supported, found ", len(options))
 	}
 
 	// Fail fast when users inadvertently implement the other LeaderAware interface.
@@ -188,7 +188,7 @@ func (r *reconcilerImpl) Reconcile(ctx context.Context, key string) error {
 	// by the reconciler. Returns an error is the resource key is invalid.
 	s, err := newState(key, r)
 	if err != nil {
-		logger.Errorf("invalid resource key: %s", key)
+		logger.Errorf("invalid resource key: ", key)
 		return nil
 	}
 
@@ -338,7 +338,7 @@ func (r *reconcilerImpl) updateStatus(ctx context.Context, existing *v1alpha1.Po
 		}
 
 		if diff, err := kmp.SafeDiff(existing.Status, desired.Status); err == nil && diff != "" {
-			logging.FromContext(ctx).Debugf("Updating status with: %s", diff)
+			logging.FromContext(ctx).Debugf("Updating status with: ", diff)
 		}
 
 		existing.Status = desired.Status

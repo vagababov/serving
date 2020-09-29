@@ -114,7 +114,7 @@ func TestRevisionConversion(t *testing.T) {
 						return
 					}
 				}
-				t.Errorf("ConvertTo() = %v", err)
+				t.Errorf("ConvertTo() = ", err)
 			} else if test.badField != "" {
 				t.Errorf("CovnertUp() = %#v, wanted bad field %q", beta,
 					test.badField)
@@ -122,7 +122,7 @@ func TestRevisionConversion(t *testing.T) {
 			}
 			got := &Revision{}
 			if err := got.ConvertFrom(context.Background(), beta); err != nil {
-				t.Errorf("ConvertFrom() = %v", err)
+				t.Errorf("ConvertFrom() = ", err)
 			}
 			if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Roundtrip (-want, +got): \n%s", diff)
@@ -141,7 +141,7 @@ func TestRevisionConversion(t *testing.T) {
 						return
 					}
 				}
-				t.Errorf("ConvertTo() = %v", err)
+				t.Errorf("ConvertTo() = ", err)
 			} else if test.badField != "" {
 				t.Errorf("CovnertUp() = %#v, wanted bad field %q", beta,
 					test.badField)
@@ -149,7 +149,7 @@ func TestRevisionConversion(t *testing.T) {
 			}
 			got := &Revision{}
 			if err := got.ConvertFrom(context.Background(), beta); err != nil {
-				t.Errorf("ConvertFrom() = %v", err)
+				t.Errorf("ConvertFrom() = ", err)
 			}
 			if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Roundtrip (-want, +got): \n%s", diff)
@@ -192,11 +192,11 @@ func TestRevisionConversionForMultiContainer(t *testing.T) {
 	}
 	beta := &v1beta1.Revision{}
 	if err := input.ConvertTo(context.Background(), beta); err != nil {
-		t.Errorf("ConvertTo() = %v", err)
+		t.Errorf("ConvertTo() = ", err)
 	}
 	got := &Revision{}
 	if err := got.ConvertFrom(context.Background(), beta); err != nil {
-		t.Errorf("ConvertFrom() = %v", err)
+		t.Errorf("ConvertFrom() = ", err)
 	}
 	if diff := cmp.Diff(input, got, cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("Roundtrip (-want, +got): \n%s", diff)

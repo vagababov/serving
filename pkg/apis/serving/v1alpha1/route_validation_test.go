@@ -201,7 +201,7 @@ func TestRouteValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if diff := cmp.Diff(test.want.Error(), test.r.Validate(context.Background()).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -411,7 +411,7 @@ func TestRouteSpecValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if diff := cmp.Diff(test.want.Error(), test.rs.Validate(context.Background()).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -519,7 +519,7 @@ func TestTrafficTargetValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if diff := cmp.Diff(test.want.Error(), test.tt.Validate(context.Background()).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -702,7 +702,7 @@ func TestRouteAnnotationUpdate(t *testing.T) {
 			ctx := context.Background()
 			ctx = apis.WithinUpdate(ctx, test.prev)
 			if diff := cmp.Diff(test.want.Error(), test.this.Validate(ctx).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}

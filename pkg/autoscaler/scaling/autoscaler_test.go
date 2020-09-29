@@ -96,7 +96,7 @@ func TestAutoscalerScaleDownDelay(t *testing.T) {
 
 	as, err := New(testNamespace, testRevision, metrics, pc, spec, TestContextWithLogger(t))
 	if err != nil {
-		t.Fatalf("Expected no error with a valid ScaleDownDelay, got %v", err)
+		t.Fatalf("Expected no error with a valid ScaleDownDelay, got ", err)
 	}
 
 	now := time.Time{}
@@ -169,7 +169,7 @@ func TestAutoscalerScaleDownDelayZero(t *testing.T) {
 
 	as, err := New(testNamespace, testRevision, metrics, pc, spec, TestContextWithLogger(t))
 	if err != nil {
-		t.Fatalf("Expected no error with a valid ScaleDownDelay, got %v", err)
+		t.Fatalf("Expected no error with a valid ScaleDownDelay, got ", err)
 	}
 
 	now := time.Time{}

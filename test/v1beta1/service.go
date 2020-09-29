@@ -40,18 +40,18 @@ import (
 func validateCreatedServiceStatus(clients *test.Clients, names *test.ResourceNames) error {
 	return CheckServiceState(clients.ServingBetaClient, names.Service, func(s *v1beta1.Service) (bool, error) {
 		if s.Status.URL == nil || s.Status.URL.Host == "" {
-			return false, fmt.Errorf("URL is not present in Service status: %v", s)
+			return false, fmt.Errorf("URL is not present in Service status: ", s)
 		}
 		names.URL = s.Status.URL.URL()
 		if s.Status.LatestCreatedRevisionName == "" {
-			return false, fmt.Errorf("LatestCreatedRevisionName is not present in Service status: %v", s)
+			return false, fmt.Errorf("LatestCreatedRevisionName is not present in Service status: ", s)
 		}
 		names.Revision = s.Status.LatestCreatedRevisionName
 		if s.Status.LatestReadyRevisionName == "" {
-			return false, fmt.Errorf("LatestReadyRevisionName is not present in Service status: %v", s)
+			return false, fmt.Errorf("LatestReadyRevisionName is not present in Service status: ", s)
 		}
 		if s.Status.ObservedGeneration != 1 {
-			return false, fmt.Errorf("ObservedGeneration is not 1 in Service status: %v", s)
+			return false, fmt.Errorf("ObservedGeneration is not 1 in Service status: ", s)
 		}
 		return true, nil
 	})
@@ -93,7 +93,7 @@ func GetResourceObjects(clients *test.Clients, names test.ResourceNames) (*Resou
 // Returns error if the service does not come up correctly.
 func CreateServiceReady(t pkgTest.T, clients *test.Clients, names *test.ResourceNames, fopt ...rtesting.ServiceOption) (*ResourceObjects, error) {
 	if names.Image == "" {
-		return nil, fmt.Errorf("expected non-empty Image name; got Image=%v", names.Image)
+		return nil, fmt.Errorf("expected non-empty Image name; got Image=", names.Image)
 	}
 
 	t.Log("Creating a new Service.", "service", names.Service)

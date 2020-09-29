@@ -134,7 +134,7 @@ func TestTargetBurstCapacity(t *testing.T) {
 		t.Logf("resources.ReadyAddressCount(svcEps) = %d", resources.ReadyAddressCount(svcEps))
 		return resources.ReadyAddressCount(svcEps) == 2, nil
 	}); err != nil {
-		t.Errorf("Never achieved subset of size 2: %v", err)
+		t.Errorf("Never achieved subset of size 2: ", err)
 	}
 }
 

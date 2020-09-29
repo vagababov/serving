@@ -291,7 +291,7 @@ func TestRouteConversion(t *testing.T) {
 			beta := &v1beta1.Route{}
 			if err := test.in.ConvertTo(context.Background(), beta); err != nil {
 				if !test.wantErr {
-					t.Errorf("ConvertTo() = %v", err)
+					t.Errorf("ConvertTo() = ", err)
 				}
 				return
 			} else if test.wantErr {
@@ -299,10 +299,10 @@ func TestRouteConversion(t *testing.T) {
 			}
 			got := &Route{}
 			if err := got.ConvertFrom(context.Background(), beta); err != nil {
-				t.Errorf("ConvertFrom() = %v", err)
+				t.Errorf("ConvertFrom() = ", err)
 			}
 			if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("roundtrip (-want, +got) = %v", diff)
+				t.Errorf("roundtrip (-want, +got) = ", diff)
 			}
 		})
 
@@ -315,14 +315,14 @@ func TestRouteConversion(t *testing.T) {
 			start := toDeprecated(test.in)
 			beta := &v1beta1.Route{}
 			if err := start.ConvertTo(context.Background(), beta); err != nil {
-				t.Errorf("ConvertTo() = %v", err)
+				t.Errorf("ConvertTo() = ", err)
 			}
 			got := &Route{}
 			if err := got.ConvertFrom(context.Background(), beta); err != nil {
-				t.Errorf("ConvertFrom() = %v", err)
+				t.Errorf("ConvertFrom() = ", err)
 			}
 			if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("roundtrip (-want, +got) = %v", diff)
+				t.Errorf("roundtrip (-want, +got) = ", diff)
 			}
 		})
 	}

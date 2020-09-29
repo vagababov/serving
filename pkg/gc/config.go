@@ -123,7 +123,7 @@ func NewConfigFromConfigMapFunc(ctx context.Context) func(configMap *corev1.Conf
 			return nil, fmt.Errorf("failed to parse max-stale-revisions: %w", err)
 		}
 		if c.MinNonActiveRevisions < 0 {
-			return nil, fmt.Errorf("min-non-active-revisions must be non-negative, was: %d", c.MinNonActiveRevisions)
+			return nil, fmt.Errorf("min-non-active-revisions must be non-negative, was: ", c.MinNonActiveRevisions)
 		}
 		if c.MaxNonActiveRevisions >= 0 && c.MinNonActiveRevisions > c.MaxNonActiveRevisions {
 			return nil, fmt.Errorf("min-non-active-revisions(%d) must be <= max-stale-revisions(%d)", c.MinNonActiveRevisions, c.MaxNonActiveRevisions)

@@ -367,7 +367,7 @@ func TestNewConfig(t *testing.T) {
 				t.Errorf("NewConfigFromConfigMap() = %v, want %v", err, test.wantErr)
 			}
 			if diff := cmp.Diff(test.want, gotCM); diff != "" {
-				t.Errorf("NewConfigFromConfigMap (-want, +got) = %v", diff)
+				t.Errorf("NewConfigFromConfigMap (-want, +got) = ", diff)
 			}
 
 			got, err := NewConfigFromMap(test.input)
@@ -375,7 +375,7 @@ func TestNewConfig(t *testing.T) {
 				t.Errorf("NewConfigFromMap() = %v, want %v", err, test.wantErr)
 			}
 			if diff := cmp.Diff(got, gotCM); diff != "" {
-				t.Errorf("NewConfigFromMap (-got, +gotCM) = %s", diff)
+				t.Errorf("NewConfigFromMap (-got, +gotCM) = ", diff)
 			}
 		})
 	}

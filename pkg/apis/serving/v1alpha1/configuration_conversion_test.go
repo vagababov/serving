@@ -192,7 +192,7 @@ func TestConfigurationConversion(t *testing.T) {
 							return
 						}
 					}
-					t.Errorf("ConvertTo() = %v", err)
+					t.Errorf("ConvertTo() = ", err)
 				} else if test.badField != "" {
 					t.Errorf("ConvertTo() = %#v, wanted bad field %q", ver,
 						test.badField)
@@ -200,10 +200,10 @@ func TestConfigurationConversion(t *testing.T) {
 				}
 				got := &Configuration{}
 				if err := got.ConvertFrom(context.Background(), ver); err != nil {
-					t.Errorf("ConvertFrom() = %v", err)
+					t.Errorf("ConvertFrom() = ", err)
 				}
 				if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
-					t.Errorf("roundtrip (-want, +got) = %v", diff)
+					t.Errorf("roundtrip (-want, +got) = ", diff)
 				}
 			})
 
@@ -219,7 +219,7 @@ func TestConfigurationConversion(t *testing.T) {
 							return
 						}
 					}
-					t.Errorf("ConvertTo() = %v", err)
+					t.Errorf("ConvertTo() = ", err)
 				} else if test.badField != "" {
 					t.Errorf("CovnertUp() = %#v, wanted bad field %q", ver,
 						test.badField)
@@ -227,10 +227,10 @@ func TestConfigurationConversion(t *testing.T) {
 				}
 				got := &Configuration{}
 				if err := got.ConvertFrom(context.Background(), ver); err != nil {
-					t.Errorf("ConvertFrom() = %v", err)
+					t.Errorf("ConvertFrom() = ", err)
 				}
 				if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
-					t.Errorf("roundtrip (-want, +got) = %v", diff)
+					t.Errorf("roundtrip (-want, +got) = ", diff)
 				}
 			})
 		}

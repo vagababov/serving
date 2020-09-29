@@ -214,5 +214,5 @@ func getRevisionFromConfiguration(clients *test.Clients, configName string) (str
 	if config.Status.LatestCreatedRevisionName != "" {
 		return config.Status.LatestCreatedRevisionName, nil
 	}
-	return "", fmt.Errorf("No valid revision name found in configuration %s", configName)
+	return "", fmt.Errorf("No valid revision name found in configuration ", configName)
 }

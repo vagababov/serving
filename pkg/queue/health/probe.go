@@ -99,7 +99,7 @@ func HTTPProbe(config HTTPProbeConfigOptions) error {
 	}()
 
 	if !IsHTTPProbeReady(res) {
-		return fmt.Errorf("HTTP probe did not respond Ready, got status code: %d", res.StatusCode)
+		return fmt.Errorf("HTTP probe did not respond Ready, got status code: ", res.StatusCode)
 	}
 
 	return nil

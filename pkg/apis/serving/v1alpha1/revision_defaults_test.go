@@ -325,7 +325,7 @@ func TestRevisionDefaulting(t *testing.T) {
 			}
 			got.SetDefaults(ctx)
 			if diff := cmp.Diff(test.want, got, ignoreUnexportedResources); diff != "" {
-				t.Errorf("SetDefaults (-want, +got) = %v", diff)
+				t.Errorf("SetDefaults (-want, +got) = ", diff)
 			}
 		})
 	}

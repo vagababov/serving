@@ -677,7 +677,7 @@ func TestServiceValidation(t *testing.T) {
 				ctx = test.wc(ctx)
 			}
 			if diff := cmp.Diff(test.want.Error(), test.s.Validate(ctx).Error()); diff != "" {
-				t.Errorf("Validate() (-want, +got) = %v", diff)
+				t.Errorf("Validate() (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -723,7 +723,7 @@ func TestRunLatestTypeValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if diff := cmp.Diff(test.want.Error(), test.rlt.Validate(context.Background()).Error()); diff != "" {
-				t.Errorf("validateContainer (-want, +got) = %v", diff)
+				t.Errorf("validateContainer (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -785,7 +785,7 @@ func TestPinnedTypeValidation(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if diff := cmp.Diff(test.want.Error(), test.pt.Validate(context.Background()).Error()); diff != "" {
-				t.Errorf("validateContainer (-want, +got) = %v", diff)
+				t.Errorf("validateContainer (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -1065,7 +1065,7 @@ func TestImmutableServiceFields(t *testing.T) {
 			ctx := context.Background()
 			ctx = apis.WithinUpdate(ctx, test.old)
 			if diff := cmp.Diff(test.want.Error(), test.new.Validate(ctx).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -1186,7 +1186,7 @@ func TestServiceSubresourceUpdate(t *testing.T) {
 			ctx := context.Background()
 			ctx = apis.WithinSubResourceUpdate(ctx, test.service, test.subresource)
 			if diff := cmp.Diff(test.want.Error(), test.service.Validate(ctx).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}
@@ -1304,7 +1304,7 @@ func TestServiceAnnotationUpdate(t *testing.T) {
 			ctx := context.Background()
 			ctx = apis.WithinUpdate(ctx, test.prev)
 			if diff := cmp.Diff(test.want.Error(), test.this.Validate(ctx).Error()); diff != "" {
-				t.Errorf("Validate (-want, +got) = %v", diff)
+				t.Errorf("Validate (-want, +got) = ", diff)
 			}
 		})
 	}

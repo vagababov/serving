@@ -53,7 +53,7 @@ func newState(key string, r *reconcilerImpl) (*state, error) {
 	// Convert the namespace/name string into a distinct namespace and name
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("invalid resource key: %s", key)
+		return nil, fmt.Errorf("invalid resource key: ", key)
 	}
 
 	roi, isROI := r.reconciler.(ReadOnlyInterface)

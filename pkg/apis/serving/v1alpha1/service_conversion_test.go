@@ -129,16 +129,16 @@ func TestServiceConversion(t *testing.T) {
 			t.Run(test.name, func(t *testing.T) {
 				ver := version
 				if err := test.in.ConvertTo(context.Background(), ver); err != nil {
-					t.Errorf("ConvertTo() = %v", err)
+					t.Errorf("ConvertTo() = ", err)
 				}
 				t.Logf("ConvertTo() = %#v", ver)
 				got := &Service{}
 				if err := got.ConvertFrom(context.Background(), ver); err != nil {
-					t.Errorf("ConvertFrom() = %v", err)
+					t.Errorf("ConvertFrom() = ", err)
 				}
 				t.Logf("ConvertFrom() = %#v", got)
 				if diff := cmp.Diff(test.in, got, cmpopts.EquateEmpty()); diff != "" {
-					t.Errorf("roundtrip (-want, +got) = %v", diff)
+					t.Errorf("roundtrip (-want, +got) = ", diff)
 				}
 			})
 		}
@@ -690,16 +690,16 @@ func TestServiceConversionFromDeprecated(t *testing.T) {
 							return
 						}
 					}
-					t.Errorf("ConvertTo() = %v", err)
+					t.Errorf("ConvertTo() = ", err)
 				}
 				t.Logf("ConvertTo() = %#v", ver)
 				got := &Service{}
 				if err := got.ConvertFrom(context.Background(), ver); err != nil {
-					t.Errorf("ConvertFrom() = %v", err)
+					t.Errorf("ConvertFrom() = ", err)
 				}
 				t.Logf("ConvertFrom() = %#v", got)
 				if diff := cmp.Diff(test.want, got, cmpopts.EquateEmpty()); diff != "" {
-					t.Errorf("roundtrip (-want, +got) = %v", diff)
+					t.Errorf("roundtrip (-want, +got) = ", diff)
 				}
 			})
 		}

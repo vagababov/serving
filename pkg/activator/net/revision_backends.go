@@ -148,7 +148,7 @@ func (rw *revisionWatcher) getK8sPrivateService() (*corev1.Service, error) {
 	case 1:
 		return svcList[0], nil
 	default:
-		return nil, fmt.Errorf("found multiple private services matching revision %v", rw.rev)
+		return nil, fmt.Errorf("found multiple private services matching revision ", rw.rev)
 	}
 }
 

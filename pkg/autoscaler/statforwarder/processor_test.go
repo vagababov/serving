@@ -37,14 +37,14 @@ func TestProcessorForwarding(t *testing.T) {
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Fatalf("error upgrading websocket: %v", err)
+			t.Fatalf("error upgrading websocket: ", err)
 		}
 
 		defer conn.Close()
 		for {
 			_, _, err := conn.ReadMessage()
 			if err != nil {
-				t.Fatalf("error reading message: %v", err)
+				t.Fatalf("error reading message: ", err)
 			}
 			received <- struct{}{}
 		}

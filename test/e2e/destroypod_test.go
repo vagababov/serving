@@ -127,7 +127,7 @@ func TestDestroyPodInflight(t *testing.T) {
 		}
 
 		if res.StatusCode != http.StatusOK {
-			return fmt.Errorf("expected response to have status 200, had %d", res.StatusCode)
+			return fmt.Errorf("expected response to have status 200, had ", res.StatusCode)
 		}
 		expectedBody := fmt.Sprintf("Slept for %d milliseconds", timeoutRequestDuration.Milliseconds())
 		gotBody := string(res.Body)
@@ -146,7 +146,7 @@ func TestDestroyPodInflight(t *testing.T) {
 	})
 
 	if err := g.Wait(); err != nil {
-		t.Errorf("Something went wrong with the request: %v", err)
+		t.Errorf("Something went wrong with the request: ", err)
 	}
 }
 
@@ -322,6 +322,6 @@ func TestDestroyPodWithRequests(t *testing.T) {
 
 	// Make sure all the requests succeed.
 	if err := eg.Wait(); err != nil {
-		t.Errorf("Not all requests finished with success, eg: %v", err)
+		t.Errorf("Not all requests finished with success, eg: ", err)
 	}
 }
