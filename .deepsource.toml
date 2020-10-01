@@ -1,6 +1,11 @@
 version = 1
 
 test_patterns = ["**/*_test.go"]
+exclude_patterns = [
+  "pkg/client/**",
+  "test/test_images/**",
+  "vendor/**",
+]
 
 [[analyzers]]
 name = "go"
