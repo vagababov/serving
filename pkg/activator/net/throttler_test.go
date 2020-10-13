@@ -389,11 +389,7 @@ func TestThrottlerSuccesses(t *testing.T) {
 	}, {
 		name: "roundrobin test",
 		revision: revision(types.NamespacedName{Namespace: testNamespace, Name: testRevision},
-<<<<<<< HEAD
-			networking.ProtocolHTTP1, 5 /*cc >3*/),
-=======
 			pkgnet.ProtocolHTTP1, 5 /*cc >3*/),
->>>>>>> master
 		initUpdates: []revisionDestsUpdate{{
 			Rev:   types.NamespacedName{Namespace: testNamespace, Name: testRevision},
 			Dests: sets.NewString("128.0.0.1:1234", "128.0.0.2:1234", "211.212.213.214"),
@@ -483,15 +479,6 @@ func TestThrottlerSuccesses(t *testing.T) {
 				wantCapacity = dests * int(*cc)
 			}
 			if err := wait.PollImmediate(10*time.Millisecond, 3*time.Second, func() (bool, error) {
-<<<<<<< HEAD
-				if *cc != 0 {
-					return rt.activatorIndex.Load() != -1 && rt.breaker.Capacity() == wantCapacity, nil
-				}
-				// If CC=0 then verify number of backends, rather the capacity of breaker.
-				rt.mux.RLock()
-				defer rt.mux.RUnlock()
-				return rt.activatorIndex.Load() != -1 && dests == len(rt.assignedTrackers), nil
-=======
 				rt.mux.RLock()
 				defer rt.mux.RUnlock()
 				if *cc != 0 {
@@ -501,7 +488,6 @@ func TestThrottlerSuccesses(t *testing.T) {
 				// If CC=0 then verify number of backends, rather the capacity of breaker.
 				return rt.activatorIndex.Load() != -1 && dests == len(rt.assignedTrackers) &&
 					sortedTrackers(rt.assignedTrackers), nil
->>>>>>> master
 			}); err != nil {
 				t.Fatal("Timed out waiting for the capacity to be updated")
 			}
