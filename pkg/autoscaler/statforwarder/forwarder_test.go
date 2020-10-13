@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,20 +46,34 @@ import (
 const (
 	bucket1 = "as-bucket-00-of-02"
 	bucket2 = "as-bucket-01-of-02"
+	testIP1 = "1.23.456.789"
+	testIP2 = "0.23.456.789"
 )
 
 var (
-	testIP1   = "1.23.456.789"
-	testIP2   = "0.23.456.789"
-	testNs    = system.Namespace()
-	testBs    = hash.NewBucketSet(sets.NewString(bucket1))
-	testLease = &coordinationv1.Lease{
+	testHolder1 = "autoscaler-1_" + testIP1
+	testHolder2 = "autoscaler-2_" + testIP2
+	testNs      = system.Namespace()
+	testBs      = hash.NewBucketSet(sets.NewString(bucket1))
+	testLease   = &coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      bucket1,
 			Namespace: testNs,
 		},
 		Spec: coordinationv1.LeaseSpec{
-			HolderIdentity: &testIP1,
+			HolderIdentity: &testHolder1,
+		},
+	}
+	stat1 = asmetrics.StatMessage{
+		Key: types.NamespacedName{
+			Namespace: testNs,
+			Name:      "succulent", // Mapped to bucket1
+		},
+	}
+	stat2 = asmetrics.StatMessage{
+		Key: types.NamespacedName{
+			Namespace: testNs,
+			Name:      "plant", // Mapped to bucket2
 		},
 	}
 	// A statProcessor doing nothing.
@@ -79,25 +93,26 @@ func TestForwarderReconcile(t *testing.T) {
 		t.Fatal("Failed to start informers:", err)
 	}
 
+	f1 := New(ctx, logger, kubeClient, testIP1, testBs, noOp)
+	f2 := New(ctx, logger, kubeClient, testIP2, testBs, noOp)
+
 	defer func() {
+		f1.Cancel()
+		f2.Cancel()
 		cancel()
 		waitInformers()
 	}()
 
-	New(ctx, logger, kubeClient, testIP1, testBs, noOp)
-	New(ctx, logger, kubeClient, testIP2, testBs, noOp)
-
-	kubeClient.CoordinationV1().Leases(testNs).Create(testLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, testLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(testLease)
 
 	var lastErr error
 	// Wait for the resources to be created.
 	if err := wait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
-		_, err := service.Lister().Services(testNs).Get(bucket1)
-		lastErr = err
-		return err == nil, nil
+		_, lastErr = service.Lister().Services(testNs).Get(bucket1)
+		return lastErr == nil, nil
 	}); err != nil {
-		t.Fatalf("Timeout to get the Service: %v", lastErr)
+		t.Fatal("Timeout to get the Service:", lastErr)
 	}
 
 	wantSubsets := []v1.EndpointSubset{{
@@ -112,47 +127,46 @@ func TestForwarderReconcile(t *testing.T) {
 	}
 
 	// Check the endpoints got updated.
+	el := endpoints.Lister().Endpoints(testNs)
 	if err := wait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
-		got, err := endpoints.Lister().Endpoints(testNs).Get(bucket1)
+		got, err := el.Get(bucket1)
 		if err != nil {
 			lastErr = err
 			return false, nil
 		}
 
-		if equality.Semantic.DeepEqual(wantSubsets, got.Subsets) {
-			return true, nil
+		if !cmp.Equal(wantSubsets, got.Subsets) {
+			lastErr = fmt.Errorf("Got Subsets = %v, want = %v", got.Subsets, wantSubsets)
+			return false, nil
 		}
-
-		lastErr = fmt.Errorf("Got Subsets = %v, want = %v", got.Subsets, wantSubsets)
-		return false, nil
+		return true, nil
 	}); err != nil {
-		t.Fatalf("Timeout to get the Endpoints: %v", lastErr)
+		t.Fatal("Timeout to get the Endpoints:", lastErr)
 	}
 
 	// Lease holder gets changed.
 	l := testLease.DeepCopy()
-	l.Spec.HolderIdentity = &testIP2
-	kubeClient.CoordinationV1().Leases(testNs).Update(l)
+	l.Spec.HolderIdentity = &testHolder2
+	kubeClient.CoordinationV1().Leases(testNs).Update(ctx, l, metav1.UpdateOptions{})
 	lease.Informer().GetIndexer().Add(l)
 
-	// Check the endpoints got updated.
+	// Check that the endpoints got updated.
 	wantSubsets[0].Addresses[0].IP = testIP2
-	if err := wait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
+	if err := wait.PollImmediate(10*time.Millisecond, 10*time.Second, func() (bool, error) {
 		// Check the endpoints get updated.
-		got, err := endpoints.Lister().Endpoints(testNs).Get(bucket1)
+		got, err := el.Get(bucket1)
 		if err != nil {
 			lastErr = err
 			return false, nil
 		}
 
-		if equality.Semantic.DeepEqual(wantSubsets, got.Subsets) {
-			return true, nil
+		if !cmp.Equal(wantSubsets, got.Subsets) {
+			lastErr = fmt.Errorf("Got Subsets = %v, want = %v", got.Subsets, wantSubsets)
+			return false, nil
 		}
-
-		lastErr = fmt.Errorf("Got Subsets = %v, want = %v", got.Subsets, wantSubsets)
-		return false, nil
+		return true, nil
 	}); err != nil {
-		t.Fatalf("Timeout to get the Endpoints: %v", lastErr)
+		t.Fatal("Timeout to get the Endpoints:", lastErr)
 	}
 }
 
@@ -187,7 +201,7 @@ func TestForwarderRetryOnSvcCreationFailure(t *testing.T) {
 		},
 	)
 
-	kubeClient.CoordinationV1().Leases(testNs).Create(testLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, testLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(testLease)
 
 	select {
@@ -228,7 +242,7 @@ func TestForwarderRetryOnEndpointsCreationFailure(t *testing.T) {
 		},
 	)
 
-	kubeClient.CoordinationV1().Leases(testNs).Create(testLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, testLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(testLease)
 
 	select {
@@ -276,9 +290,9 @@ func TestForwarderRetryOnEndpointsUpdateFailure(t *testing.T) {
 			Namespace: testNs,
 		},
 	}
-	kubeClient.CoreV1().Endpoints(testNs).Create(e)
+	kubeClient.CoreV1().Endpoints(testNs).Create(ctx, e, metav1.CreateOptions{})
 	endpoints.Informer().GetIndexer().Add(e)
-	kubeClient.CoordinationV1().Leases(testNs).Create(testLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, testLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(testLease)
 
 	select {
@@ -330,12 +344,12 @@ func TestForwarderSkipReconciling(t *testing.T) {
 		description: "not autoscaler bucket lease",
 		namespace:   testNs,
 		name:        bucket2,
-		holder:      testIP1,
+		holder:      testHolder1,
 	}, {
 		description: "different namespace",
 		namespace:   "other-ns",
 		name:        bucket1,
-		holder:      testIP1,
+		holder:      testHolder1,
 	}, {
 		description: "without holder",
 		namespace:   testNs,
@@ -344,7 +358,7 @@ func TestForwarderSkipReconciling(t *testing.T) {
 		description: "not the holder",
 		namespace:   testNs,
 		name:        bucket1,
-		holder:      testIP2,
+		holder:      testHolder2,
 	}}
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
@@ -359,7 +373,7 @@ func TestForwarderSkipReconciling(t *testing.T) {
 					HolderIdentity: &tc.holder,
 				}
 			}
-			kubeClient.CoordinationV1().Leases(testNs).Create(l)
+			kubeClient.CoordinationV1().Leases(testNs).Create(ctx, l, metav1.CreateOptions{})
 			lease.Informer().GetIndexer().Add(l)
 
 			select {
@@ -392,29 +406,21 @@ func TestProcess(t *testing.T) {
 		waitInformers()
 	}()
 
+	// Make a buffered channel so it won't block the forwarder process.
+	acceptCh := make(chan int, 2)
 	acceptCount := 0
 	accept := func(sm asmetrics.StatMessage) {
 		acceptCount++
+		acceptCh <- acceptCount
 	}
 	f := New(ctx, logger, kubeClient, testIP1, hash.NewBucketSet(sets.NewString(bucket1, bucket2)), accept)
 
-	stat1 := asmetrics.StatMessage{
-		Key: types.NamespacedName{
-			Namespace: testNs,
-			Name:      "succulent", // Mapped to bucket1
-		},
-	}
-	stat2 := asmetrics.StatMessage{
-		Key: types.NamespacedName{
-			Namespace: testNs,
-			Name:      "plant", // Mapped to bucket2
-		},
-	}
-
-	// A Forward without any leadership information should process without error.
+	// A Forward without any leadership information should process with retry.
+	// Stat1 should be accepted and stat2 should be forwarded.
 	f.Process(stat1)
+	f.Process(stat2)
 
-	kubeClient.CoordinationV1().Leases(testNs).Create(testLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, testLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(testLease)
 
 	anotherLease := &coordinationv1.Lease{
@@ -423,38 +429,59 @@ func TestProcess(t *testing.T) {
 			Namespace: testNs,
 		},
 		Spec: coordinationv1.LeaseSpec{
-			HolderIdentity: &testIP2,
+			HolderIdentity: &testHolder2,
 		},
 	}
-	kubeClient.CoordinationV1().Leases(testNs).Create(anotherLease)
+	kubeClient.CoordinationV1().Leases(testNs).Create(ctx, anotherLease, metav1.CreateOptions{})
 	lease.Informer().GetIndexer().Add(anotherLease)
 
 	// Wait for the forwarder to become the leader for bucket1.
-	if err := wait.PollImmediate(10*time.Millisecond, 2*time.Second, func() (bool, error) {
+	if err := wait.PollImmediate(10*time.Millisecond, 10*time.Second, func() (bool, error) {
 		p1 := f.getProcessor(bucket1)
 		p2 := f.getProcessor(bucket2)
-		return p1 != nil && p2 != nil && p1.holder == testIP1 && p2.holder == testIP2 && p1.conn == nil && p2.conn != nil, nil
+		return p1 != nil && p2 != nil && p1.ip == testIP1 && p2.ip == testIP2, nil
 	}); err != nil {
 		t.Fatalf("Timeout waiting f.processors got updated")
 	}
 
-	forwardCount := 0
-	// Override the proc so we do not actually send via WebSocket.
-	f.processors[bucket2].proc = func(sm asmetrics.StatMessage) {
-		forwardCount++
+	// Wait for the stat enqueued previously to be retried.
+	got := <-acceptCh
+	if got != 1 {
+		t.Fatalf("Got = %v, want: 1", got)
 	}
 
+	// Accept once more.
 	f.Process(stat1)
-	f.Process(stat2)
-	f.Process(stat2)
 
-	if got, want := acceptCount, 1; got != want {
-		t.Errorf("acceptCount = %d, want = %d", got, want)
-	}
-	if got, want := forwardCount, 2; got != want {
-		t.Errorf("forwardCount = %d, want = %d", got, want)
+	got = <-acceptCh
+	if got != 2 {
+		t.Fatalf("Got = %v, want: 2", got)
 	}
 
 	// Make sure Cancel can be called without crash.
 	f.Cancel()
+}
+
+func TestIsBucketOwner(t *testing.T) {
+	f := Forwarder{
+		processors: map[string]*bucketProcessor{
+			bucket1: {
+				bkt:    bucket1,
+				accept: noOp,
+			},
+			bucket2: {
+				bkt: bucket2,
+			},
+		},
+	}
+
+	if got := f.IsBucketOwner(bucket1); got != true {
+		t.Errorf("IsBktOwner(bucket1) = %v, want false", got)
+	}
+	if got := f.IsBucketOwner(bucket2); got != false {
+		t.Errorf("IsBktOwner(bucket2) = %v, want true", got)
+	}
+	if got := f.IsBucketOwner("not-in-record"); got != false {
+		t.Errorf("IsBktOwner(not-in-record) = %v, want true", got)
+	}
 }

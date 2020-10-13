@@ -50,6 +50,7 @@ import (
 	"knative.dev/networking/pkg/apis/networking/v1alpha1"
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
+	pkgnet "knative.dev/pkg/network"
 	"knative.dev/pkg/ptr"
 	"knative.dev/pkg/reconciler"
 	"knative.dev/pkg/system"
@@ -142,7 +143,7 @@ func getRouteIngressFromClient(ctx context.Context, t *testing.T, route *v1.Rout
 			serving.RouteNamespaceLabelKey: route.Namespace,
 		}).String(),
 	}
-	ingresses, err := fakenetworkingclient.Get(ctx).NetworkingV1alpha1().Ingresses(route.Namespace).List(opts)
+	ingresses, err := fakenetworkingclient.Get(ctx).NetworkingV1alpha1().Ingresses(route.Namespace).List(ctx, opts)
 	if err != nil {
 		t.Errorf("Ingress.Get(%v) = %v", opts, err)
 	}
@@ -159,7 +160,7 @@ func addRouteToInformers(ctx context.Context, t *testing.T, route *v1.Route) {
 
 	ns := route.Namespace
 
-	route, err := fakeservingclient.Get(ctx).ServingV1().Routes(ns).Get(route.Name, metav1.GetOptions{})
+	route, err := fakeservingclient.Get(ctx).ServingV1().Routes(ns).Get(ctx, route.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Route.Get(%v) = %v", route.Name, err)
 	}
@@ -183,7 +184,7 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady,
 		MarkInactive("NoTraffic", "no message"))
 
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A route targeting the revision
@@ -192,7 +193,7 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 		ConfigurationName: "test-config",
 		Percent:           ptr.Int64(100),
 	}), WithRouteLabel(map[string]string{"route": "test-route"}))
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 
@@ -217,7 +218,7 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			Visibility: v1alpha1.IngressVisibilityClusterLocal,
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
@@ -262,12 +263,12 @@ func TestCreateRouteForOneReserveRevision(t *testing.T) {
 		}},
 	}
 	if diff := cmp.Diff(expectedSpec, ci.Spec); diff != "" {
-		t.Errorf("Unexpected rule spec diff (-want +got): %s", diff)
+		t.Error("Unexpected rule spec diff (-want +got):", diff)
 	}
 
 	// Update ingress loadbalancer to trigger placeholder service creation.
 	ci.Status = v1alpha1.IngressStatus{
-		LoadBalancer: &v1alpha1.LoadBalancerStatus{
+		DeprecatedLoadBalancer: &v1alpha1.LoadBalancerStatus{
 			Ingress: []v1alpha1.LoadBalancerIngressStatus{{
 				DomainInternal: "test-domain",
 			}},
@@ -310,7 +311,7 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 	}()
 	// A standalone revision.
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A configuration and associated revision. Normally the revision would be
@@ -319,10 +320,10 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 	cfgrev := revisionForConfig(config)
 	config.Status.SetLatestCreatedRevisionName(cfgrev.Name)
 	config.Status.SetLatestReadyRevisionName(cfgrev.Name)
-	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(config)
+	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(ctx, config, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakecfginformer.Get(ctx).Informer().GetIndexer().Add(config)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(cfgrev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, cfgrev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(cfgrev)
 
 	// A route targeting both the config and standalone revision.
@@ -334,7 +335,7 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 			RevisionName: rev.Name,
 			Percent:      ptr.Int64(10),
 		}))
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer.
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 
@@ -348,7 +349,7 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -416,7 +417,7 @@ func TestCreateRouteWithMultipleTargets(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(expectedSpec, ci.Spec); diff != "" {
-		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
+		t.Error("Unexpected rule spec diff (-want +got):", diff)
 	}
 }
 
@@ -428,7 +429,7 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady,
 		MarkInactive("NoTraffic", "no message"))
 
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A configuration and associated revision. Normally the revision would be
@@ -437,10 +438,10 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 	cfgrev := revisionForConfig(config)
 	config.Status.SetLatestCreatedRevisionName(cfgrev.Name)
 	config.Status.SetLatestReadyRevisionName(cfgrev.Name)
-	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(config)
+	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(ctx, config, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakecfginformer.Get(ctx).Informer().GetIndexer().Add(config)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(cfgrev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, cfgrev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(cfgrev)
 
 	// A route targeting both the config and standalone revision
@@ -453,7 +454,7 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 			ConfigurationName: "test-config",
 			Percent:           ptr.Int64(10),
 		}))
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 
@@ -467,7 +468,7 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -534,7 +535,7 @@ func TestCreateRouteWithOneTargetReserve(t *testing.T) {
 		}},
 	}
 	if diff := cmp.Diff(expectedSpec, ci.Spec); diff != "" {
-		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
+		t.Error("Unexpected rule spec diff (-want +got):", diff)
 	}
 }
 
@@ -544,7 +545,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 
 	// A standalone revision
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady, WithK8sServiceName("test-rev"))
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A configuration and associated revision. Normally the revision would be
@@ -553,10 +554,10 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 	cfgrev := revisionForConfig(config)
 	config.Status.SetLatestCreatedRevisionName(cfgrev.Name)
 	config.Status.SetLatestReadyRevisionName(cfgrev.Name)
-	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(config)
+	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(ctx, config, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakecfginformer.Get(ctx).Informer().GetIndexer().Add(config)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(cfgrev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, cfgrev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(cfgrev)
 
 	// A route with duplicate targets. These will be deduped.
@@ -586,7 +587,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 			RevisionName: "test-rev",
 			Percent:      ptr.Int64(15),
 		}))
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 
@@ -600,7 +601,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -668,7 +669,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 			Hosts: []string{
 				"test-revision-1-test-route.test",
 				"test-revision-1-test-route.test.svc",
-				"test-revision-1-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-revision-1-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -714,7 +715,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 			Hosts: []string{
 				"test-revision-2-test-route.test",
 				"test-revision-2-test-route.test.svc",
-				"test-revision-2-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-revision-2-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -761,7 +762,7 @@ func TestCreateRouteWithDuplicateTargets(t *testing.T) {
 
 	if diff := cmp.Diff(expectedSpec, ci.Spec); diff != "" {
 		fmt.Printf("%+v\n", ci.Spec)
-		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
+		t.Error("Unexpected rule spec diff (-want +got):", diff)
 	}
 }
 
@@ -770,7 +771,7 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 	defer cf()
 	// A standalone revision
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady, WithK8sServiceName("test-rev"))
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A configuration and associated revision. Normally the revision would be
@@ -779,10 +780,10 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 	cfgrev := revisionForConfig(config)
 	config.Status.SetLatestCreatedRevisionName(cfgrev.Name)
 	config.Status.SetLatestReadyRevisionName(cfgrev.Name)
-	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(config)
+	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(ctx, config, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakecfginformer.Get(ctx).Informer().GetIndexer().Add(config)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(cfgrev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, cfgrev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(cfgrev)
 
 	// A route targeting both the config and standalone revision with named
@@ -798,7 +799,7 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 			Percent:           ptr.Int64(50),
 		}))
 
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 
@@ -812,7 +813,7 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -880,7 +881,7 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 			Hosts: []string{
 				"bar-test-route.test",
 				"bar-test-route.test.svc",
-				"bar-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("bar-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -926,7 +927,7 @@ func TestCreateRouteWithNamedTargets(t *testing.T) {
 			Hosts: []string{
 				"foo-test-route.test",
 				"foo-test-route.test.svc",
-				"foo-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("foo-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -991,7 +992,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 	})
 	// A standalone revision
 	rev := Revision(testNamespace, "test-rev", MarkRevisionReady, WithK8sServiceName("test-rev"))
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(rev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, rev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(rev)
 
 	// A configuration and associated revision. Normally the revision would be
@@ -1000,10 +1001,10 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 	cfgrev := revisionForConfig(config)
 	config.Status.SetLatestCreatedRevisionName(cfgrev.Name)
 	config.Status.SetLatestReadyRevisionName(cfgrev.Name)
-	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(config)
+	fakeservingclient.Get(ctx).ServingV1().Configurations(testNamespace).Create(ctx, config, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakecfginformer.Get(ctx).Informer().GetIndexer().Add(config)
-	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(cfgrev)
+	fakeservingclient.Get(ctx).ServingV1().Revisions(testNamespace).Create(ctx, cfgrev, metav1.CreateOptions{})
 	fakerevisioninformer.Get(ctx).Informer().GetIndexer().Add(cfgrev)
 
 	// A route targeting both the config and standalone revision with named
@@ -1019,7 +1020,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 			Percent:           ptr.Int64(50),
 		}))
 
-	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(route)
+	fakeservingclient.Get(ctx).ServingV1().Routes(testNamespace).Create(ctx, route, metav1.CreateOptions{})
 	// Since Reconcile looks in the lister, we need to add it to the informer
 	fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
 	ctl.Reconciler.Reconcile(context.Background(), KeyOrDie(route))
@@ -1032,7 +1033,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 			Hosts: []string{
 				"test-route.test",
 				"test-route.test.svc",
-				"test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -1190,7 +1191,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 			Hosts: []string{
 				"bar-test-route.test",
 				"bar-test-route.test.svc",
-				"bar-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("bar-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -1242,7 +1243,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 			Hosts: []string{
 				"foo-test-route.test",
 				"foo-test-route.test.svc",
-				"foo-test-route.test.svc.cluster.local",
+				pkgnet.GetServiceHostname("foo-test-route", "test"),
 			},
 			HTTP: &v1alpha1.HTTPIngressRuleValue{
 				Paths: []v1alpha1.HTTPIngressPath{{
@@ -1295,7 +1296,7 @@ func TestCreateRouteWithNamedTargetsAndTagBasedRouting(t *testing.T) {
 
 	if diff := cmp.Diff(expectedSpec, ci.Spec); diff != "" {
 		fmt.Printf("%+v\n", ci.Spec)
-		t.Errorf("Unexpected rule spec diff (-want +got): %v", diff)
+		t.Error("Unexpected rule spec diff (-want +got):", diff)
 	}
 }
 
@@ -1363,7 +1364,7 @@ func TestUpdateDomainConfigMap(t *testing.T) {
 
 			// Create a route.
 			fakerouteinformer.Get(ctx).Informer().GetIndexer().Add(route)
-			routeClient.Create(route)
+			routeClient.Create(ctx, route, metav1.CreateOptions{})
 			if err := ctl.Reconciler.Reconcile(context.Background(), KeyOrDie(route)); err != nil {
 				t.Fatal("Reconcile() =", err)
 			}
@@ -1400,7 +1401,7 @@ func TestUpdateDomainConfigMap(t *testing.T) {
 				route = route.DeepCopy()
 				route.Generation++
 				tc.apply(route, watcher)
-				if _, err := routeClient.Update(route); err != nil {
+				if _, err := routeClient.Update(ctx, route, metav1.UpdateOptions{}); err != nil {
 					t.Fatal("Route.Update() =", err)
 				}
 
@@ -1420,7 +1421,7 @@ func TestUpdateDomainConfigMap(t *testing.T) {
 
 				var gotDomain string
 				if err := wait.PollImmediate(10*time.Millisecond, 5*time.Second, func() (bool, error) {
-					r, err := routeClient.Get(route.Name, metav1.GetOptions{})
+					r, err := routeClient.Get(ctx, route.Name, metav1.GetOptions{})
 					if err != nil {
 						return false, err
 					}
@@ -1513,7 +1514,7 @@ func TestGlobalResyncOnUpdateDomainConfigMap(t *testing.T) {
 			defer func() {
 				cf()
 				if err := grp.Wait(); err != nil {
-					t.Errorf("Wait() = %v", err)
+					t.Error("Wait() =", err)
 				}
 				waitInformers()
 			}()
@@ -1528,7 +1529,7 @@ func TestGlobalResyncOnUpdateDomainConfigMap(t *testing.T) {
 			route := Route(testNamespace, "test-route",
 				WithRouteLabel(map[string]string{"app": "prod"}), WithRouteGeneration(1))
 
-			created, err := servingClient.ServingV1().Routes(route.Namespace).Create(route)
+			created, err := servingClient.ServingV1().Routes(route.Namespace).Create(ctx, route, metav1.CreateOptions{})
 			if err != nil {
 				t.Fatal("Failed to create route", err)
 			}

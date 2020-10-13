@@ -35,9 +35,11 @@ import (
 	"knative.dev/pkg/reconciler/testing"
 	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
+	"knative.dev/serving/pkg/apis/serving/v1alpha1"
 	fakeservingclientset "knative.dev/serving/pkg/client/clientset/versioned/fake"
 	palisters "knative.dev/serving/pkg/client/listers/autoscaling/v1alpha1"
 	servinglisters "knative.dev/serving/pkg/client/listers/serving/v1"
+	servingv1alpha1listers "knative.dev/serving/pkg/client/listers/serving/v1alpha1"
 )
 
 var clientSetSchemes = []func(*runtime.Scheme) error{
@@ -106,6 +108,10 @@ func (l *Listers) GetRouteLister() servinglisters.RouteLister {
 	return servinglisters.NewRouteLister(l.IndexerFor(&v1.Route{}))
 }
 
+func (l *Listers) GetDomainMappingLister() servingv1alpha1listers.DomainMappingLister {
+	return servingv1alpha1listers.NewDomainMappingLister(l.IndexerFor(&v1alpha1.DomainMapping{}))
+}
+
 // GetServerlessServiceLister returns a lister for the ServerlessService objects.
 func (l *Listers) GetServerlessServiceLister() networkinglisters.ServerlessServiceLister {
 	return networkinglisters.NewServerlessServiceLister(l.IndexerFor(&networking.ServerlessService{}))
@@ -167,14 +173,6 @@ func (l *Listers) GetEndpointsLister() corev1listers.EndpointsLister {
 // GetPodsLister gets lister for pods.
 func (l *Listers) GetPodsLister() corev1listers.PodLister {
 	return corev1listers.NewPodLister(l.IndexerFor(&corev1.Pod{}))
-}
-
-func (l *Listers) GetSecretLister() corev1listers.SecretLister {
-	return corev1listers.NewSecretLister(l.IndexerFor(&corev1.Secret{}))
-}
-
-func (l *Listers) GetConfigMapLister() corev1listers.ConfigMapLister {
-	return corev1listers.NewConfigMapLister(l.IndexerFor(&corev1.ConfigMap{}))
 }
 
 // GetNamespaceLister gets lister for Namespace resource.

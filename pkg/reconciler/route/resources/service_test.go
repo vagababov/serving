@@ -1,5 +1,5 @@
 /*
-Copyright 2018 The Knative Authors.
+Copyright 2018 The Knative Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import (
 	"knative.dev/networking/pkg/apis/networking"
 	netv1alpha1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
 	"knative.dev/pkg/kmeta"
+	pkgnet "knative.dev/pkg/network"
 	apiConfig "knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -79,7 +80,7 @@ func TestNewMakeK8SService(t *testing.T) {
 		route: r,
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
 					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{}},
 				},
 				PublicLoadBalancer: &netv1alpha1.LoadBalancerStatus{
@@ -97,7 +98,7 @@ func TestNewMakeK8SService(t *testing.T) {
 		route: r,
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
 					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{
 						Domain: "domain.com",
 					}, {
@@ -127,7 +128,7 @@ func TestNewMakeK8SService(t *testing.T) {
 		route: r,
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
 					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{Domain: "domain.com"}},
 				},
 				PublicLoadBalancer: &netv1alpha1.LoadBalancerStatus{
@@ -153,21 +154,21 @@ func TestNewMakeK8SService(t *testing.T) {
 		route: r,
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
-					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: "istio-ingressgateway.istio-system.svc.cluster.local"}},
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
+					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: pkgnet.GetServiceHostname("istio-ingressgateway", "istio-system")}},
 				},
 				PublicLoadBalancer: &netv1alpha1.LoadBalancerStatus{
-					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: "istio-ingressgateway.istio-system.svc.cluster.local"}},
+					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: pkgnet.GetServiceHostname("istio-ingressgateway", "istio-system")}},
 				},
 				PrivateLoadBalancer: &netv1alpha1.LoadBalancerStatus{
-					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: "private-istio-ingressgateway.istio-system.svc.cluster.local"}},
+					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{DomainInternal: pkgnet.GetServiceHostname("private-istio-ingressgateway", "istio-system")}},
 				},
 			},
 		},
 		expectedMeta: expectedMeta,
 		expectedSpec: corev1.ServiceSpec{
 			Type:            corev1.ServiceTypeExternalName,
-			ExternalName:    "private-istio-ingressgateway.istio-system.svc.cluster.local",
+			ExternalName:    pkgnet.GetServiceHostname("private-istio-ingressgateway", "istio-system"),
 			SessionAffinity: corev1.ServiceAffinityNone,
 			Ports: []corev1.ServicePort{{
 				Name:       networking.ServicePortNameH2C,
@@ -180,7 +181,7 @@ func TestNewMakeK8SService(t *testing.T) {
 		route: r,
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
 					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{MeshOnly: true}},
 				},
 				PublicLoadBalancer: &netv1alpha1.LoadBalancerStatus{
@@ -205,7 +206,7 @@ func TestNewMakeK8SService(t *testing.T) {
 		targetName: "my-target-name",
 		ingress: &netv1alpha1.Ingress{
 			Status: netv1alpha1.IngressStatus{
-				LoadBalancer: &netv1alpha1.LoadBalancerStatus{
+				DeprecatedLoadBalancer: &netv1alpha1.LoadBalancerStatus{
 					Ingress: []netv1alpha1.LoadBalancerIngressStatus{{MeshOnly: true}},
 				},
 				PublicLoadBalancer: &netv1alpha1.LoadBalancerStatus{
@@ -309,10 +310,10 @@ func TestMakeK8sPlaceholderService(t *testing.T) {
 		wantErr: false,
 	}, {
 		name:  "cluster local route",
-		route: Route("test-ns", "test-route", WithRouteLabel(map[string]string{serving.VisibilityLabelKey: serving.VisibilityClusterLocal})),
+		route: Route("test-ns", "test-route", WithRouteLabel(map[string]string{network.VisibilityLabelKey: serving.VisibilityClusterLocal})),
 		expectedSpec: corev1.ServiceSpec{
 			Type:            corev1.ServiceTypeExternalName,
-			ExternalName:    "foo-test-route.test-ns.svc.cluster.local",
+			ExternalName:    pkgnet.GetServiceHostname("foo-test-route", "test-ns"),
 			SessionAffinity: corev1.ServiceAffinityNone,
 			Ports: []corev1.ServicePort{{
 				Name:       networking.ServicePortNameH2C,
@@ -345,13 +346,13 @@ func TestMakeK8sPlaceholderService(t *testing.T) {
 			}
 
 			if !cmp.Equal(tt.expectedLabels, got.Labels) {
-				t.Errorf("Unexpected Labels (-want +got): %s", cmp.Diff(tt.expectedLabels, got.Labels))
+				t.Error("Unexpected Labels (-want +got):", cmp.Diff(tt.expectedLabels, got.Labels))
 			}
 			if !cmp.Equal(tt.expectedAnnos, got.ObjectMeta.Annotations) {
-				t.Errorf("Unexpected Annotations (-want +got): %s", cmp.Diff(tt.expectedAnnos, got.ObjectMeta.Annotations))
+				t.Error("Unexpected Annotations (-want +got):", cmp.Diff(tt.expectedAnnos, got.ObjectMeta.Annotations))
 			}
 			if !cmp.Equal(tt.expectedSpec, got.Spec) {
-				t.Errorf("Unexpected ServiceSpec (-want +got): %s", cmp.Diff(tt.expectedSpec, got.Spec))
+				t.Error("Unexpected ServiceSpec (-want +got):", cmp.Diff(tt.expectedSpec, got.Spec))
 			}
 		})
 	}
@@ -427,80 +428,7 @@ func TestGetNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := GetNames(tt.services); !cmp.Equal(got, tt.want) {
-				t.Errorf("GetNames() (-want, +got) = %v", cmp.Diff(tt.want, got))
-			}
-		})
-	}
-}
-
-func TestGetDesiredServiceNames(t *testing.T) {
-	var route *v1.Route
-	tests := []struct {
-		name    string
-		traffic RouteOption
-		want    sets.String
-		tmpl    string
-		wantErr bool
-	}{{
-		name: "no traffic defined",
-		want: sets.NewString("myroute"),
-	}, {
-		name:    "only default traffic",
-		traffic: WithSpecTraffic(v1.TrafficTarget{}),
-		want:    sets.NewString("myroute"),
-	}, {
-		name: "traffic targets with default and tags",
-		traffic: WithSpecTraffic(
-			v1.TrafficTarget{},
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "bye"},
-		),
-		want: sets.NewString("myroute", "hello-myroute", "bye-myroute"),
-	}, {
-		name: "traffic targets with default and tags custom template",
-		tmpl: "{{.Name}}<=>{{.Tag}}",
-		traffic: WithSpecTraffic(
-			v1.TrafficTarget{},
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "bye"},
-		),
-		want: sets.NewString("myroute", "myroute<=>hello", "myroute<=>bye"),
-	}, {
-		name:    "bad tag template",
-		tmpl:    "{{.Bullet}}<=>{{.WithButterflyWings}}",
-		traffic: WithSpecTraffic(v1.TrafficTarget{Tag: "bye"}),
-		wantErr: true,
-	}, {
-		name: "traffic targets with NO default and tags",
-		traffic: WithSpecTraffic(
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "hello"},
-			v1.TrafficTarget{Tag: "bye"},
-		),
-		want: sets.NewString("myroute", "hello-myroute", "bye-myroute"),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := testConfig()
-			if tt.tmpl != "" {
-				cfg.Network.TagTemplate = tt.tmpl
-			}
-			ctx := config.ToContext(context.Background(), cfg)
-
-			if tt.traffic != nil {
-				route = Route("default", "myroute", tt.traffic)
-			} else {
-				route = Route("default", "myroute")
-			}
-			got, err := GetDesiredServiceNames(ctx, route)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GetDesiredServiceNames() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !cmp.Equal(got, tt.want) {
-				t.Errorf("GetDesiredServiceNames() (-want, +got) = %v", cmp.Diff(tt.want, got))
+				t.Error("GetNames() (-want, +got) =", cmp.Diff(tt.want, got))
 			}
 		})
 	}

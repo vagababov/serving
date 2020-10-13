@@ -42,13 +42,16 @@ function update_knative() {
   # and services from istio before reintalling it, to get them freshly recreated
   kubectl delete deployments --all -n istio-system
   kubectl delete services --all -n istio-system
-  install_istio || abort "Failed to install Istio"
+
+  # Create the ${SYSTEM_NAMESPACE} is it does not exist.
+  kubectl get ns "${SYSTEM_NAMESPACE}" || kubectl create namespace "${SYSTEM_NAMESPACE}"
+  install_istio "./third_party/net-istio.yaml" || abort "Failed to install Istio"
 
   # Overprovision the Istio gateways and pilot.
   kubectl patch hpa -n istio-system istio-ingressgateway \
-    --patch '{"spec": {"minReplicas": 10, "maxReplicas": 10}}'
+    --patch '{"spec": {"minReplicas": 15, "maxReplicas": 15}}'
   kubectl patch deploy -n istio-system cluster-local-gateway \
-    --patch '{"spec": {"replicas": 10}}'
+    --patch '{"spec": {"replicas": 15}}'
 
   echo ">> Updating serving"
   # Retry installation for at most three times as there can sometime be a race condition when applying serving CRDs
@@ -102,6 +105,9 @@ function update_benchmark() {
   echo ">> Deleting all Knative serving services"
   kubectl delete ksvc --all
 
+  echo ">> Upload the test images"
+  # Upload helloworld test image as it's used by the scale-from-zero benchmark.
+  ko resolve -RBf test/test_images/helloworld > /dev/null
   echo ">> Applying all the yamls for benchmark $1"
   ko apply -f ${BENCHMARK_ROOT_PATH}/$1/continuous || abort "failed to apply benchmarks yaml $1"
 }

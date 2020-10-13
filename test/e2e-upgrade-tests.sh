@@ -69,7 +69,10 @@ function knative_setup() {
 
 # Script entry point.
 
-initialize $@ --skip-istio-addon
+# Skip installing istio as an add-on.
+# Temporarily increasing the cluster size for serving tests to rule out
+# resource/eviction as causes of flakiness.
+initialize "$@" --skip-istio-addon --min-nodes=4 --max-nodes=4
 
 # We haven't configured these deployments for high-availability,
 # so disable the chaos duck.
@@ -78,6 +81,9 @@ disable_chaosduck
 
 # TODO(#2656): Reduce the timeout after we get this test to consistently passing.
 TIMEOUT=10m
+# Probe tests starts before postupgrade tests and ends after postdowngrade tests.
+# The timeout should be at least 10m + 10m.
+PROBE_TIMEOUT=20m
 
 header "Running preupgrade tests"
 
@@ -86,10 +92,12 @@ go_test_e2e -tags=preupgrade -timeout=${TIMEOUT} ./test/upgrade \
 
 header "Starting prober test"
 
-# Remove this in case we failed to clean it up in an earlier test.
+# Remove the following files in case we failed to clean them up in an earlier test.
 rm -f /tmp/prober-signal
+rm -f /tmp/autoscaling-signal
+rm -f /tmp/autoscaling-tbc-signal
 
-go_test_e2e -tags=probe -timeout=${TIMEOUT} ./test/upgrade \
+go_test_e2e -tags=probe -timeout=${PROBE_TIMEOUT} ./test/upgrade \
   --resolvabledomain=$(use_resolvable_domain) &
 PROBER_PID=$!
 echo "Prober PID is ${PROBER_PID}"
@@ -106,11 +114,13 @@ header "Running postdowngrade tests"
 go_test_e2e -tags=postdowngrade -timeout=${TIMEOUT} ./test/upgrade \
   --resolvabledomain=$(use_resolvable_domain) || fail_test
 
-# The prober is blocking on /tmp/prober-signal to know when it should exit.
+# The probe tests are blocking on the following files to know when it should exit.
 #
 # This is kind of gross. First attempt was to just send a signal to the go test,
 # but "go test" intercepts the signal and always exits with a non-zero code.
 echo "done" > /tmp/prober-signal
+echo "done" > /tmp/autoscaling-signal
+echo "done" > /tmp/autoscaling-tbc-signal
 
 header "Waiting for prober test"
 wait ${PROBER_PID} || fail_test "Prober failed"

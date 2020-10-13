@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package domains
 
 import (
@@ -24,6 +25,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"knative.dev/pkg/apis"
+	pkgnet "knative.dev/pkg/network"
 
 	network "knative.dev/networking/pkg"
 	"knative.dev/serving/pkg/apis/serving"
@@ -79,7 +81,7 @@ func TestDomainNameFromTemplate(t *testing.T) {
 		name:     "LocalDash",
 		template: "{{.Name}}-{{.Namespace}}.{{.Domain}}",
 		args:     args{name: "test-name"},
-		want:     "test-name.default.svc.cluster.local",
+		want:     pkgnet.GetServiceHostname("test-name", "default"),
 		local:    true,
 	}, {
 		name:     "Short",
@@ -135,9 +137,9 @@ func TestDomainNameFromTemplate(t *testing.T) {
 			ctx = config.ToContext(ctx, cfg)
 
 			if tt.local {
-				meta.Labels[serving.VisibilityLabelKey] = serving.VisibilityClusterLocal
+				meta.Labels[network.VisibilityLabelKey] = serving.VisibilityClusterLocal
 			} else {
-				delete(meta.Labels, serving.VisibilityLabelKey)
+				delete(meta.Labels, network.VisibilityLabelKey)
 			}
 
 			got, err := DomainNameFromTemplate(ctx, meta, tt.args.name)
@@ -257,7 +259,7 @@ func TestGetAllDomainsAndTags(t *testing.T) {
 				return
 			}
 			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("GetAllDomains() diff (-want +got): %v", diff)
+				t.Error("GetAllDomains() diff (-want +got):", diff)
 			}
 		})
 	}

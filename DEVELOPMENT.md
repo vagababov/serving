@@ -50,7 +50,8 @@ If you're working on and changing `.proto` files:
    - [Docker Hub quickstart](https://docs.docker.com/docker-hub/)
    - If developing locally with Docker or Minikube, you can set
      `KO_DOCKER_REPO=ko.local` (preferred) or use the `-L` flag to `ko` to build
-     and push locally (in this case, authentication is not needed).
+     and push locally (in this case, authentication is not needed). If
+     developing with kind you can set `KO_DOCKER_REPO=kind.local`.
 
 **Note**: You'll need to be authenticated with your `KO_DOCKER_REPO` before
 pushing images. Run `gcloud auth configure-docker` if you are using Google
@@ -115,6 +116,8 @@ Once you've [setup your development environment](#prerequisites), stand up
 redeploying the new version should work fine, but if you run into trouble, you
 can easily [clean your cluster up](#clean-up) and try again.
 
+Enter the `serving` directory to install the following components.
+
 ### Setup cluster admin
 
 Your user must be a cluster admin to perform the setup needed for Knative. This
@@ -136,12 +139,11 @@ Kubernetes cluster in your designated environment, if necessary.
 ### Deploy Istio
 
 ```shell
-STABLE_VERSION=$(curl https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable)
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/${STABLE_VERSION}/istio-crds.yaml"
+kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-crds.yaml"
 while [[ $(kubectl get crd gateways.networking.istio.io -o jsonpath='{.status.conditions[?(@.type=="Established")].status}') != 'True' ]]; do
   echo "Waiting on Istio CRDs"; sleep 1
 done
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/${STABLE_VERSION}/istio-minimal.yaml"
+kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-minimal.yaml"
 kubectl apply -f ./third_party/net-istio.yaml
 ```
 
@@ -157,8 +159,7 @@ installed, please install it with following command. You could also adjust
 parameters if needed.
 
 ```shell
-STABLE_VERSION=$(curl https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable)
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/${STABLE_VERSION}/istio-knative-extras.yaml"
+kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-knative-extras.yaml"
 ```
 
 > If you want to customize the `istio*.yaml` files you can refer to the
@@ -191,8 +192,8 @@ This step includes building Knative Serving, creating and pushing developer
 images and deploying them to your Kubernetes cluster. If you're developing
 locally (for example, using
 [Docker-on-Mac](https://knative.dev/docs/install/knative-with-docker-for-mac/)),
-set `KO_DOCKER_REPO=ko.local` to avoid needing to push your images to an
-off-machine registry.
+set `KO_DOCKER_REPO=ko.local` (or `KO_DOCKER_REPO=kind.local` respectively to
+avoid needing to push your images to an off-machine registry.
 
 Run:
 
@@ -269,7 +270,8 @@ of:
   - API type definitions in [pkg/apis/serving/v1/](./pkg/apis/serving/v1/.).
   - Type definitions annotated with `// +k8s:deepcopy-gen=true`.
   - The `_example` value of config maps (to keep the
-    `knative.dev/example-checksum` label in sync).
+    `knative.dev/example-checksum` annotations in sync). These can also be
+    individually updated using `./hack/update-checksums.sh`.
   - `.proto` files. Run `./hack/update-codegen.sh` with the
     `--generate-protobufs` flag to enable protocol buffer generation.
 
@@ -310,8 +312,8 @@ ko delete --ignore-not-found=true \
   -f config/monitoring/100-namespace.yaml \
   -Rf config/core/ \
   -f ./third_party/net-istio.yaml \
-  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/${STABLE_VERSION}/istio-minimal.yaml" \
-  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/${STABLE_VERSION}/istio-crds.yaml" \
+  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-minimal.yaml" \
+  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-crds.yaml" \
   -f ./third_party/cert-manager-0.12.0/cert-manager-crds.yaml \
   -f ./third_party/cert-manager-0.12.0/cert-manager.yaml
 ```

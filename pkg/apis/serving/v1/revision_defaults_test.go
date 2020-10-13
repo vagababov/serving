@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"knative.dev/pkg/apis"
 	logtesting "knative.dev/pkg/logging/testing"
 	"knative.dev/pkg/ptr"
 	"knative.dev/serving/pkg/apis/config"
@@ -57,10 +58,12 @@ func TestRevisionDefaulting(t *testing.T) {
 	}{{
 		name: "empty",
 		in:   &Revision{},
-		want: &Revision{Spec: RevisionSpec{
-			TimeoutSeconds:       ptr.Int64(config.DefaultRevisionTimeoutSeconds),
-			ContainerConcurrency: ptr.Int64(config.DefaultContainerConcurrency),
-		}},
+		want: &Revision{
+			Spec: RevisionSpec{
+				TimeoutSeconds:       ptr.Int64(config.DefaultRevisionTimeoutSeconds),
+				ContainerConcurrency: ptr.Int64(config.DefaultContainerConcurrency),
+			},
+		},
 	}, {
 		name: "with context",
 		in:   &Revision{Spec: RevisionSpec{PodSpec: corev1.PodSpec{Containers: []corev1.Container{{}}}}},
@@ -93,8 +96,45 @@ func TestRevisionDefaulting(t *testing.T) {
 			},
 		},
 	}, {
-		name: "with service links `true`",
+		name: "with context, in create, expect ESL set",
 		in:   &Revision{Spec: RevisionSpec{PodSpec: corev1.PodSpec{Containers: []corev1.Container{{}}}}},
+		wc: func(ctx context.Context) context.Context {
+			s := config.NewStore(logger)
+			s.OnConfigChanged(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: autoscalerconfig.ConfigName}})
+			s.OnConfigChanged(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: config.FeaturesConfigName}})
+			s.OnConfigChanged(&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: config.DefaultsConfigName,
+				},
+				Data: map[string]string{
+					"revision-timeout-seconds": "123",
+				},
+			})
+
+			return apis.WithinCreate(s.ToContext(ctx))
+		},
+		want: &Revision{
+			Spec: RevisionSpec{
+				ContainerConcurrency: ptr.Int64(0),
+				TimeoutSeconds:       ptr.Int64(123),
+				PodSpec: corev1.PodSpec{
+					EnableServiceLinks: ptr.Bool(false),
+					Containers: []corev1.Container{{
+						Name:           config.DefaultUserContainerName,
+						Resources:      defaultResources,
+						ReadinessProbe: defaultProbe,
+					}},
+				},
+			},
+		},
+	}, {
+		name: "with service spec `true`",
+		in: &Revision{Spec: RevisionSpec{
+			PodSpec: corev1.PodSpec{
+				EnableServiceLinks: ptr.Bool(true),
+				Containers:         []corev1.Container{{}},
+			},
+		}},
 		wc: func(ctx context.Context) context.Context {
 			s := config.NewStore(logger)
 			s.OnConfigChanged(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: autoscalerconfig.ConfigName}})
@@ -108,6 +148,37 @@ func TestRevisionDefaulting(t *testing.T) {
 				},
 			})
 			return s.ToContext(ctx)
+		},
+		want: &Revision{
+			Spec: RevisionSpec{
+				ContainerConcurrency: ptr.Int64(0),
+				TimeoutSeconds:       ptr.Int64(300),
+				PodSpec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:           config.DefaultUserContainerName,
+						Resources:      defaultResources,
+						ReadinessProbe: defaultProbe,
+					}},
+					EnableServiceLinks: ptr.Bool(true),
+				},
+			},
+		},
+	}, {
+		name: "with service links CM `true`",
+		in:   &Revision{Spec: RevisionSpec{PodSpec: corev1.PodSpec{Containers: []corev1.Container{{}}}}},
+		wc: func(ctx context.Context) context.Context {
+			s := config.NewStore(logger)
+			s.OnConfigChanged(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: autoscalerconfig.ConfigName}})
+			s.OnConfigChanged(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: config.FeaturesConfigName}})
+			s.OnConfigChanged(&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: config.DefaultsConfigName,
+				},
+				Data: map[string]string{
+					"enable-service-links": "true",
+				},
+			})
+			return apis.WithinCreate(s.ToContext(ctx))
 		},
 		want: &Revision{
 			Spec: RevisionSpec{
@@ -138,7 +209,7 @@ func TestRevisionDefaulting(t *testing.T) {
 					"enable-service-links": "false",
 				},
 			})
-			return s.ToContext(ctx)
+			return apis.WithinCreate(s.ToContext(ctx))
 		},
 		want: &Revision{
 			Spec: RevisionSpec{
@@ -193,6 +264,7 @@ func TestRevisionDefaulting(t *testing.T) {
 		in: &Revision{
 			Spec: RevisionSpec{
 				PodSpec: corev1.PodSpec{
+					EnableServiceLinks: ptr.Bool(false),
 					Containers: []corev1.Container{{
 						Image: "foo",
 						VolumeMounts: []corev1.VolumeMount{{
@@ -207,6 +279,7 @@ func TestRevisionDefaulting(t *testing.T) {
 		want: &Revision{
 			Spec: RevisionSpec{
 				PodSpec: corev1.PodSpec{
+					EnableServiceLinks: ptr.Bool(false),
 					Containers: []corev1.Container{{
 						Name:  config.DefaultUserContainerName,
 						Image: "foo",
@@ -500,6 +573,30 @@ func TestRevisionDefaulting(t *testing.T) {
 					}},
 				},
 			},
+		},
+	}, {
+		name: "no SetDefaults if update revision",
+		in: &Revision{
+			Spec: RevisionSpec{
+				PodSpec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "user-container-1",
+					}},
+				},
+			},
+		},
+		want: &Revision{
+			Spec: RevisionSpec{
+				PodSpec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name: "user-container-1",
+					}},
+				},
+			},
+		},
+		wc: func(ctx context.Context) context.Context {
+			ctx = apis.WithinUpdate(ctx, "fake")
+			return ctx
 		},
 	}}
 

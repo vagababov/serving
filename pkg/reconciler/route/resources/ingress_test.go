@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    https://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,6 +32,7 @@ import (
 	netv1alpha1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
 	"knative.dev/pkg/apis"
 	"knative.dev/pkg/kmeta"
+	pkgnet "knative.dev/pkg/network"
 	"knative.dev/pkg/ptr"
 	"knative.dev/pkg/system"
 	apiConfig "knative.dev/serving/pkg/apis/config"
@@ -81,11 +82,11 @@ func TestMakeIngressCorrectMetadata(t *testing.T) {
 	}
 	ia, err := MakeIngress(testContext(), r, &traffic.Config{Targets: targets}, nil, ingressClass)
 	if err != nil {
-		t.Errorf("Unexpected error %v", err)
+		t.Error("Unexpected error", err)
 	}
 
 	if !cmp.Equal(expected, ia.ObjectMeta) {
-		t.Errorf("Unexpected metadata (-want, +got): %s", cmp.Diff(expected, ia.ObjectMeta))
+		t.Error("Unexpected metadata (-want, +got):", cmp.Diff(expected, ia.ObjectMeta))
 	}
 }
 
@@ -97,7 +98,7 @@ func TestIngress_NoKubectlAnnotation(t *testing.T) {
 	}), WithRouteUID("1234-5678"), WithURL)
 	ia, err := MakeIngress(testContext(), r, &traffic.Config{Targets: targets}, nil, testIngressClass)
 	if err != nil {
-		t.Errorf("Unexpected error %v", err)
+		t.Error("Unexpected error", err)
 	}
 	if v, ok := ia.Annotations[corev1.LastAppliedConfigAnnotation]; ok {
 		t.Errorf("Annotation %s = %q, want empty", corev1.LastAppliedConfigAnnotation, v)
@@ -132,7 +133,7 @@ func TestMakeIngressSpec_CorrectRules(t *testing.T) {
 		Hosts: []string{
 			"test-route." + ns,
 			"test-route." + ns + ".svc",
-			"test-route." + ns + ".svc.cluster.local",
+			pkgnet.GetServiceHostname("test-route", ns),
 		},
 		HTTP: &netv1alpha1.HTTPIngressRuleValue{
 			Paths: []netv1alpha1.HTTPIngressPath{{
@@ -178,7 +179,7 @@ func TestMakeIngressSpec_CorrectRules(t *testing.T) {
 		Hosts: []string{
 			"v1-test-route." + ns,
 			"v1-test-route." + ns + ".svc",
-			"v1-test-route." + ns + ".svc.cluster.local",
+			pkgnet.GetServiceHostname("v1-test-route", ns),
 		},
 		HTTP: &netv1alpha1.HTTPIngressRuleValue{
 			Paths: []netv1alpha1.HTTPIngressPath{{
@@ -224,11 +225,11 @@ func TestMakeIngressSpec_CorrectRules(t *testing.T) {
 
 	ci, err := MakeIngressSpec(testContext(), r, nil, targets, nil /* visibility */)
 	if err != nil {
-		t.Errorf("Unexpected error %v", err)
+		t.Error("Unexpected error", err)
 	}
 
 	if !cmp.Equal(expected, ci.Rules) {
-		t.Errorf("Unexpected rules (-want, +got): %s", cmp.Diff(expected, ci.Rules))
+		t.Error("Unexpected rules (-want, +got):", cmp.Diff(expected, ci.Rules))
 	}
 }
 
@@ -254,7 +255,7 @@ func TestMakeIngressSpec_CorrectRuleVisibility(t *testing.T) {
 			}},
 		},
 		expectedVisibility: map[netv1alpha1.IngressVisibility][]string{
-			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", "myroute.default.svc.cluster.local"},
+			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", pkgnet.GetServiceHostname("myroute", "default")},
 			netv1alpha1.IngressVisibilityExternalIP:   {"myroute.default.example.com"},
 		},
 	}, {
@@ -275,7 +276,7 @@ func TestMakeIngressSpec_CorrectRuleVisibility(t *testing.T) {
 			traffic.DefaultTarget: netv1alpha1.IngressVisibilityClusterLocal,
 		},
 		expectedVisibility: map[netv1alpha1.IngressVisibility][]string{
-			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", "myroute.default.svc.cluster.local"},
+			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", pkgnet.GetServiceHostname("myroute", "default")},
 		},
 	}, {
 		name:  "unspecified route",
@@ -292,7 +293,7 @@ func TestMakeIngressSpec_CorrectRuleVisibility(t *testing.T) {
 			}},
 		},
 		expectedVisibility: map[netv1alpha1.IngressVisibility][]string{
-			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", "myroute.default.svc.cluster.local"},
+			netv1alpha1.IngressVisibilityClusterLocal: {"myroute.default", "myroute.default.svc", pkgnet.GetServiceHostname("myroute", "default")},
 			netv1alpha1.IngressVisibilityExternalIP:   {"myroute.default.example.com"},
 		},
 	}}
@@ -300,7 +301,7 @@ func TestMakeIngressSpec_CorrectRuleVisibility(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ci, err := MakeIngressSpec(testContext(), c.route, nil, c.targets, c.serviceVisibility)
 			if err != nil {
-				t.Errorf("Unexpected error %v", err)
+				t.Error("Unexpected error", err)
 			}
 			if len(c.expectedVisibility) != len(ci.Rules) {
 				t.Errorf("Unexpected %d rules, saw %d", len(c.expectedVisibility), len(ci.Rules))
@@ -343,7 +344,7 @@ func TestMakeIngressSpec_CorrectRulesWithTagBasedRouting(t *testing.T) {
 		Hosts: []string{
 			"test-route." + ns,
 			"test-route." + ns + ".svc",
-			"test-route." + ns + ".svc.cluster.local",
+			pkgnet.GetServiceHostname("test-route", ns),
 		},
 		HTTP: &netv1alpha1.HTTPIngressRuleValue{
 			Paths: []netv1alpha1.HTTPIngressPath{{
@@ -433,7 +434,7 @@ func TestMakeIngressSpec_CorrectRulesWithTagBasedRouting(t *testing.T) {
 		Hosts: []string{
 			"v1-test-route." + ns,
 			"v1-test-route." + ns + ".svc",
-			"v1-test-route." + ns + ".svc.cluster.local",
+			pkgnet.GetServiceHostname("v1-test-route", ns),
 		},
 		HTTP: &netv1alpha1.HTTPIngressRuleValue{
 			Paths: []netv1alpha1.HTTPIngressPath{{
@@ -488,11 +489,11 @@ func TestMakeIngressSpec_CorrectRulesWithTagBasedRouting(t *testing.T) {
 
 	ci, err := MakeIngressSpec(ctx, r, nil, targets, nil /* visibility */)
 	if err != nil {
-		t.Errorf("Unexpected error %v", err)
+		t.Error("Unexpected error", err)
 	}
 
 	if !cmp.Equal(expected, ci.Rules) {
-		t.Errorf("Unexpected rules (-want, +got): %s", cmp.Diff(expected, ci.Rules))
+		t.Error("Unexpected rules (-want, +got):", cmp.Diff(expected, ci.Rules))
 	}
 }
 
@@ -535,7 +536,7 @@ func TestMakeIngressRule_Vanilla(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -582,7 +583,7 @@ func TestMakeIngressRule_ZeroPercentTarget(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -629,7 +630,7 @@ func TestMakeIngressRule_NilPercentTarget(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -688,7 +689,7 @@ func TestMakeIngressRule_TwoTargets(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -730,7 +731,7 @@ func TestMakeIngressRule_InactiveTarget(t *testing.T) {
 		Visibility: netv1alpha1.IngressVisibilityExternalIP,
 	}
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -791,7 +792,7 @@ func TestMakeIngressRule_TwoInactiveTargets(t *testing.T) {
 		Visibility: netv1alpha1.IngressVisibilityExternalIP,
 	}
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -837,7 +838,7 @@ func TestMakeIngressRule_ZeroPercentTargetInactive(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -883,7 +884,7 @@ func TestMakeIngressRule_NilPercentTargetInactive(t *testing.T) {
 	}
 
 	if !cmp.Equal(expected, rule) {
-		t.Errorf("Unexpected rule (-want, +got): %s", cmp.Diff(expected, rule))
+		t.Error("Unexpected rule (-want, +got):", cmp.Diff(expected, rule))
 	}
 }
 
@@ -915,11 +916,11 @@ func TestMakeIngressWithTLS(t *testing.T) {
 	}
 	got, err := MakeIngress(testContext(), r, &traffic.Config{Targets: targets}, tls, ingressClass)
 	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
+		t.Error("Unexpected error:", err)
 	}
 
 	if diff := cmp.Diff(expected, got); diff != "" {
-		t.Errorf("Unexpected metadata (-want, +got): %v", diff)
+		t.Error("Unexpected metadata (-want, +got):", diff)
 	}
 }
 
@@ -942,7 +943,7 @@ func TestMakeIngressTLS(t *testing.T) {
 	hostNames := []string{"test.default.example.com", "v1.test.default.example.com"}
 	got := MakeIngressTLS(cert, hostNames)
 	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("Unexpected IngressTLS (-want, +got): %v", diff)
+		t.Error("Unexpected IngressTLS (-want, +got):", diff)
 	}
 }
 
@@ -989,7 +990,7 @@ func TestMakeIngressACMEChallenges(t *testing.T) {
 		Hosts: []string{
 			"test-route.test-ns",
 			"test-route.test-ns.svc",
-			"test-route.test-ns.svc.cluster.local",
+			pkgnet.GetServiceHostname("test-route", "test-ns"),
 		},
 		Visibility: netv1alpha1.IngressVisibilityClusterLocal,
 		HTTP: &netv1alpha1.HTTPIngressRuleValue{
@@ -1043,11 +1044,11 @@ func TestMakeIngressACMEChallenges(t *testing.T) {
 
 	ci, err := MakeIngressSpec(testContext(), r, nil, targets, nil /* visibility */, acmeChallenge)
 	if err != nil {
-		t.Errorf("Unexpected error %v", err)
+		t.Error("Unexpected error", err)
 	}
 
 	if !cmp.Equal(expected, ci.Rules) {
-		t.Errorf("Unexpected rules (-want, +got): %s", cmp.Diff(expected, ci.Rules))
+		t.Error("Unexpected rules (-want, +got):", cmp.Diff(expected, ci.Rules))
 	}
 
 }
@@ -1080,7 +1081,7 @@ func TestMakeIngressFailToGenerateDomain(t *testing.T) {
 		t.Error("Expected error, saw none")
 	}
 	if err != nil && !strings.Contains(err.Error(), "DomainTemplate") {
-		t.Errorf("Expected DomainTemplate error, saw %v", err)
+		t.Error("Expected DomainTemplate error, saw", err)
 	}
 }
 
@@ -1121,7 +1122,7 @@ func TestMakeIngressFailToGenerateTagHost(t *testing.T) {
 		t.Error("Expected error, saw none")
 	}
 	if err != nil && !strings.Contains(err.Error(), "TagTemplate") {
-		t.Errorf("Expected TagTemplate error, saw %v", err)
+		t.Error("Expected TagTemplate error, saw", err)
 	}
 }
 

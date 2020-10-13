@@ -33,7 +33,7 @@ import (
 	"knative.dev/pkg/network/prober"
 	"knative.dev/serving/pkg/activator"
 	pav1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
-	asconfig "knative.dev/serving/pkg/autoscaler/config"
+	"knative.dev/serving/pkg/autoscaler/config/autoscalerconfig"
 	"knative.dev/serving/pkg/reconciler/autoscaling/config"
 	kparesources "knative.dev/serving/pkg/reconciler/autoscaling/kpa/resources"
 	aresources "knative.dev/serving/pkg/reconciler/autoscaling/resources"
@@ -131,7 +131,7 @@ func activatorProbe(pa *pav1alpha1.PodAutoscaler, transport http.RoundTripper) (
 	return prober.Do(context.Background(), transport, paToProbeTarget(pa), probeOptions...)
 }
 
-func lastPodRetention(pa *pav1alpha1.PodAutoscaler, cfg *asconfig.Config) time.Duration {
+func lastPodRetention(pa *pav1alpha1.PodAutoscaler, cfg *autoscalerconfig.Config) time.Duration {
 	d, ok := pa.ScaleToZeroPodRetention()
 	if ok {
 		return d
@@ -298,7 +298,7 @@ func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, 
 		return err
 	}
 
-	_, err = ks.dynamicClient.Resource(*gvr).Namespace(pa.Namespace).Patch(ps.Name, types.JSONPatchType,
+	_, err = ks.dynamicClient.Resource(*gvr).Namespace(pa.Namespace).Patch(ctx, ps.Name, types.JSONPatchType,
 		patchBytes, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to apply scale %d to scale target %s: %w", desiredScale, name, err)
@@ -320,6 +320,8 @@ func (ks *scaler) scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 
 	min, max := pa.ScaleBounds(asConfig)
 	initialScale := kparesources.GetInitialScale(asConfig, pa)
+	logger.Debugf("MinScale = %d, MaxScale = %d, InitialScale = %d, DesiredScale = %d Reachable = %v",
+		min, max, initialScale, desiredScale, pa.Spec.Reachability)
 	// If initial scale has been attained, ignore the initialScale altogether.
 	if initialScale > 1 && !pa.Status.IsScaleTargetInitialized() {
 		// Ignore initial scale if minScale >= initialScale.
@@ -338,7 +340,7 @@ func (ks *scaler) scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 		return desiredScale, nil
 	}
 
-	ps, err := resources.GetScaleResource(pa.Namespace, pa.Spec.ScaleTargetRef, ks.psInformerFactory)
+	ps, err := resources.GetScaleResource(ctx, pa.Namespace, pa.Spec.ScaleTargetRef, ks.psInformerFactory)
 	if err != nil {
 		return desiredScale, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
 	}
