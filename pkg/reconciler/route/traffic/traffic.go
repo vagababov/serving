@@ -18,6 +18,7 @@ package traffic
 
 import (
 	"context"
+	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -164,6 +165,54 @@ func newBuilder(
 	}
 }
 
+// BuildRollout builds the current rollout state.
+// It is expected to be invoked after applySpecTraffic.
+// TODO(vagababov): actually deal with rollouts, vs just report desired state.
+func (cfg *Config) BuildRollout() *Rollout {
+	rollout := &Rollout{}
+
+	for tag, targets := range cfg.Targets {
+		buildRolloutForTag(rollout, tag, targets)
+	}
+	sortRollout(rollout)
+	return rollout
+}
+
+// sortRollout sorts the rollout based on tag so it's consistent
+// from run to run, since input to the process is map iterator.
+func sortRollout(r *Rollout) {
+	sort.Slice(r.Configurations, func(i, j int) bool {
+		// Sort by tag and within tag sort by config name.
+		if r.Configurations[i].Tag == r.Configurations[j].Tag {
+			return r.Configurations[i].ConfigurationName < r.Configurations[j].ConfigurationName
+		}
+		return r.Configurations[i].Tag < r.Configurations[j].Tag
+	})
+}
+
+// buildRolloutForTag builds the current rollout state.
+// It is expected to be invoked after applySpecTraffic.
+// TODO(vagababov): actually deal with rollouts, vs just report desired state.
+func buildRolloutForTag(r *Rollout, tag string, rts RevisionTargets) {
+	// Only main target will have more than 1 element here.
+	for _, rt := range rts {
+		// Skip if it's revision target.
+		if rt.LatestRevision == nil || !*rt.LatestRevision {
+			continue
+		}
+
+		// The targets with the same revision are already joined together.
+		r.Configurations = append(r.Configurations, ConfigurationRollout{
+			ConfigurationName: rt.ConfigurationName,
+			Tag:               tag,
+			Revisions: []RevisionRollout{{
+				RevisionName: rt.RevisionName,
+				Percent:      int(valIfNil(0, rt.Percent)),
+			}},
+		})
+	}
+}
+
 func (cb *configBuilder) applySpecTraffic(traffic []v1.TrafficTarget) error {
 	for i := range traffic {
 		if err := cb.addTrafficTarget(&traffic[i]); err != nil {
@@ -291,11 +340,33 @@ func (cb *configBuilder) addRevisionTarget(tt *v1.TrafficTarget) error {
 	return nil
 }
 
+// valIfNil returns `val` if `ptr==nil`, or `*ptr` otherwise.
+func valIfNil(val int64, ptr *int64) int64 {
+	if ptr == nil {
+		return val
+	}
+	return *ptr
+}
+
+// This find the exact revision+tag pair and if so, just adds the percentages.
+// This expects single digit lists, so just does an O(N) search.
+func mergeIfNecessary(rts RevisionTargets, rt RevisionTarget) RevisionTargets {
+	for i := range rts {
+		if rts[i].Tag == rt.Tag && rts[i].RevisionName == rt.RevisionName &&
+			*rt.LatestRevision == *rts[i].LatestRevision {
+			rts[i].Percent = ptr.Int64(valIfNil(0, rts[i].Percent) + valIfNil(0, rt.Percent))
+			return rts
+		}
+	}
+	return append(rts, rt)
+}
+
 func (cb *configBuilder) addFlattenedTarget(target RevisionTarget) {
 	name := target.TrafficTarget.Tag
-	cb.revisionTargets = append(cb.revisionTargets, target)
+	cb.revisionTargets = mergeIfNecessary(cb.revisionTargets, target)
 	cb.targets[DefaultTarget] = append(cb.targets[DefaultTarget], target)
 	if name != "" {
+		// This should always have just a single entry at most.
 		cb.targets[name] = append(cb.targets[name], target)
 	}
 }

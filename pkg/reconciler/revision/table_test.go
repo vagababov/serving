@@ -746,8 +746,7 @@ func deploy(t *testing.T, namespace, name string, opts ...interface{}) *appsv1.D
 	// Do this here instead of in `rev` itself to ensure that we populate defaults
 	// before calling MakeDeployment within Reconcile.
 	rev.SetDefaults(context.Background())
-	deployment, err := resources.MakeDeployment(rev, cfg.Logging, cfg.Tracing, cfg.Network,
-		cfg.Observability, cfg.Deployment, cfg.Autoscaler)
+	deployment, err := resources.MakeDeployment(rev, cfg)
 	if err != nil {
 		t.Fatal("failed to create deployment")
 	}
@@ -803,16 +802,18 @@ var _ pkgreconciler.ConfigStore = (*testConfigStore)(nil)
 
 func ReconcilerTestConfig() *config.Config {
 	return &config.Config{
+		Config: &defaultconfig.Config{
+			Defaults: &defaultconfig.Defaults{},
+			Autoscaler: &autoscalerconfig.Config{
+				InitialScale:          1,
+				AllowZeroInitialScale: false,
+			},
+		},
 		Deployment: testDeploymentConfig(),
 		Observability: &metrics.ObservabilityConfig{
 			LoggingURLTemplate: "http://logger.io/${REVISION_UID}",
 		},
-		Logging:  &logging.Config{},
-		Tracing:  &tracingconfig.Config{},
-		Defaults: &defaultconfig.Defaults{},
-		Autoscaler: &autoscalerconfig.Config{
-			InitialScale:          1,
-			AllowZeroInitialScale: false,
-		},
+		Logging: &logging.Config{},
+		Tracing: &tracingconfig.Config{},
 	}
 }

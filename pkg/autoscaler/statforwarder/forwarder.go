@@ -37,8 +37,9 @@ import (
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/hash"
+	"knative.dev/pkg/network"
 	"knative.dev/pkg/system"
-	"knative.dev/pkg/websocket"
+	"knative.dev/serving/pkg/autoscaler/bucket"
 	asmetrics "knative.dev/serving/pkg/autoscaler/metrics"
 )
 
@@ -55,6 +56,8 @@ const (
 	maxProcessingRetry      = 30
 	retryProcessingInterval = 500 * time.Millisecond
 )
+
+var svcURLSuffix = fmt.Sprintf("svc.%s:%d", network.GetClusterDomainName(), autoscalerPort)
 
 // statProcessor is a function to process a single StatMessage.
 type statProcessor func(sm asmetrics.StatMessage)
@@ -87,9 +90,13 @@ type Forwarder struct {
 	// Used to capture asynchronous processes for re-enqueuing to be waited
 	// on when shutting down.
 	retryWg sync.WaitGroup
-	// Used to capture asynchronous processe for stats to be waited
+	// Used to capture asynchronous processes for stats to be waited
 	// on when shutting down.
 	processingWg sync.WaitGroup
+
+	// id2ip stores the IP extracted from the holder identity to avoid
+	// string split each time.
+	id2ip map[string]string
 
 	statCh chan stat
 	stopCh chan struct{}
@@ -108,6 +115,7 @@ func New(ctx context.Context, logger *zap.SugaredLogger, kc kubernetes.Interface
 		bs:              bs,
 		processors:      make(map[string]*bucketProcessor, len(bkts)),
 		accept:          accept,
+		id2ip:           make(map[string]string),
 		statCh:          make(chan stat, 1000),
 		stopCh:          make(chan struct{}),
 	}
@@ -128,6 +136,18 @@ func New(ctx context.Context, logger *zap.SugaredLogger, kc kubernetes.Interface
 	return f
 }
 
+func (f *Forwarder) extractIP(holder string) (string, error) {
+	if ip, ok := f.id2ip[holder]; ok {
+		return ip, nil
+	}
+
+	_, ip, err := bucket.ExtractPodNameAndIP(holder)
+	if err == nil {
+		f.id2ip[holder] = ip
+	}
+	return ip, err
+}
+
 func (f *Forwarder) filterFunc(namespace string) func(interface{}) bool {
 	return func(obj interface{}) bool {
 		l := obj.(*coordinationv1.Lease)
@@ -146,7 +166,13 @@ func (f *Forwarder) filterFunc(namespace string) func(interface{}) bool {
 			return false
 		}
 
-		if p := f.getProcessor(l.Name); p != nil && p.holder == *l.Spec.HolderIdentity {
+		// The holder identity is in format of <POD-NAME>_<POD-IP>.
+		ip, err := f.extractIP(*l.Spec.HolderIdentity)
+		if err != nil {
+			f.logger.Warn("Found invalid Lease holder identify ", *l.Spec.HolderIdentity)
+			return false
+		}
+		if p := f.getProcessor(l.Name); p != nil && p.ip == ip {
 			// Already up-to-date.
 			return false
 		}
@@ -170,10 +196,17 @@ func (f *Forwarder) leaseUpdated(obj interface{}) {
 	// Close existing connection if there's one. The target address won't
 	// be the same as the IP has changed.
 	f.shutdown(f.getProcessor(n))
-	holder := *l.Spec.HolderIdentity
-	f.setProcessor(n, f.createProcessor(n, holder))
+	// The map should have the IP because of the operations in the filter when queueing.
+	ip, ok := f.id2ip[*l.Spec.HolderIdentity]
+	if !ok {
+		// This shouldn't happen because we store the value into the map in the filter
+		// when queueing. Add a log here in case something unexpected happens.
+		f.logger.Warn("IP not found in cached map for ", *l.Spec.HolderIdentity)
+		return
+	}
+	f.setProcessor(n, f.createProcessor(ns, n, ip))
 
-	if holder != f.selfIP {
+	if ip != f.selfIP {
 		// Skip creating/updating Service and Endpoints if not the leader.
 		return
 	}
@@ -301,26 +334,19 @@ func (f *Forwarder) setProcessor(bkt string, p *bucketProcessor) {
 	f.processors[bkt] = p
 }
 
-func (f *Forwarder) createProcessor(bkt, holder string) *bucketProcessor {
-	if holder == f.selfIP {
+func (f *Forwarder) createProcessor(ns, bkt, ip string) *bucketProcessor {
+	if ip == f.selfIP {
 		return &bucketProcessor{
 			bkt:    bkt,
 			logger: f.logger.With(zap.String("bucket", bkt)),
-			holder: holder,
+			ip:     ip,
 			accept: f.accept,
 		}
 	}
 
-	// TODO(9235): Currently we use IP directly. This won't work if there
-	// is mesh. Need to fall back to connection via Service.
-	dns := fmt.Sprintf("ws://%s:%d", holder, autoscalerPort)
-	f.logger.Info("Connecting to Autoscaler bucket at ", dns)
-	return &bucketProcessor{
-		bkt:    bkt,
-		logger: f.logger.With(zap.String("bucket", bkt)),
-		holder: holder,
-		conn:   websocket.NewDurableSendingConnection(dns, f.logger),
-	}
+	return newForwardProcessor(f.logger.With(zap.String("bucket", bkt)), bkt, ip,
+		fmt.Sprintf("ws://%s:%d", ip, autoscalerPort),
+		fmt.Sprintf("ws://%s.%s.%s", bkt, ns, svcURLSuffix))
 }
 
 // Process enqueues the given Stat for processing asynchronously.
@@ -370,6 +396,7 @@ func (f *Forwarder) maybeRetry(logger *zap.SugaredLogger, s stat) {
 	f.retryWg.Add(1)
 	go func() {
 		defer f.retryWg.Done()
+		// TODO(yanweiguo): Use RateLimitingInterface and NewItemFastSlowRateLimiter.
 		time.Sleep(retryProcessingInterval)
 		logger.Debug("Enqueuing stat for retry.")
 		f.statCh <- s
@@ -395,4 +422,11 @@ func (f *Forwarder) Cancel() {
 
 	f.processingWg.Wait()
 	close(f.statCh)
+}
+
+// IsBucketOwner returns true if this Autoscaler pod is the owner of the given bucket.
+func (f *Forwarder) IsBucketOwner(bkt string) bool {
+	p := f.getProcessor(bkt)
+	// The accept func is not nil iif this Autoscaler is the owner.
+	return p != nil && p.accept != nil
 }
