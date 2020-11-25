@@ -21,7 +21,9 @@ limitations under the License.
 
 package traffic
 
-import "sort"
+import (
+	"sort"
+)
 
 // Rollout encapsulates the current rollout state of the system.
 // Since the route might reference more than one configuration.
@@ -54,8 +56,18 @@ type ConfigurationRollout struct {
 	// Note: that it is not 100% of the route traffic, in more complex cases.
 	Revisions []RevisionRollout `json:"revisions,omitempty"`
 
-	// TODO(vagababov): more rollout fields here, e.g. duration
-	// next step time, etc.
+	// Deadline is the Unix timestamp by when (+/- reconcile precision)
+	// the Rollout shoud be complete.
+	Deadline int `json:"deadline,omitempty"`
+
+	// LastStepTimeStamp is the Unix timestamp when the last
+	// rollout step was performed.
+	LastStepTime int `json:"lastStep,omitempty"`
+
+	// StepDuration is a rounded up number of seconds how long it took
+	// for ingress to successfully move first 1% of traffic to the new revision.
+	// Note, that his number does not include any coldstart, etc timing.
+	StepDuration int `json:"stepDuration,omitempty"`
 }
 
 // RevisionRollout describes the revision in the config rollout.
@@ -66,6 +78,27 @@ type RevisionRollout struct {
 	// of total Route traffic, not the relative share of configuration
 	// target percentage.
 	Percent int `json:"percent"`
+}
+
+// Validate validates current rollout for inconsistencies.
+// This is expected to be invoked after annotation deserialization.
+// If it returns false — the deserialized object should be discarded.
+func (cur *Rollout) Validate() bool {
+	for _, c := range cur.Configurations {
+		// Cannot be over 100% in our system.
+		if c.Percent > 100 {
+			return false
+		}
+		// If total % values in the revision do not add up — discard.
+		tot := 0
+		for _, r := range c.Revisions {
+			tot += r.Percent
+		}
+		if tot != c.Percent {
+			return false
+		}
+	}
+	return true
 }
 
 // Step merges this rollout object with the previous state and
@@ -112,15 +145,24 @@ func (cur *Rollout) Step(prev *Rollout) *Rollout {
 				i++
 			case ccfgs[i].ConfigurationName == pcfgs[j].ConfigurationName:
 				// Config might have 0% traffic assigned, if it is a tag only route (i.e.
-				// receives no traffic via default tag).
-				if ccfgs[i].Percent != 0 {
+				// receives no traffic via default tag). So just skip it from the rollout
+				// altogether.
+				switch p := ccfgs[i].Percent; {
+				case p > 1:
 					ret = append(ret, *stepConfig(ccfgs[i], pcfgs[j]))
+				case p == 1:
+					// Skip all the work if it's a common A/B scenario where the test config
+					// receives just 1% of traffic.
+					ret = append(ret, *ccfgs[i])
 				}
 				i++
 				j++
 			case ccfgs[i].ConfigurationName < pcfgs[j].ConfigurationName:
 				// A new config, has been added. No action for rollout though.
-				ret = append(ret, *ccfgs[i])
+				// Keep it if it will receive traffic.
+				if ccfgs[i].Percent != 0 {
+					ret = append(ret, *ccfgs[i])
+				}
 				i++
 			default: // cur > prev.
 				// A config has been removed during this update.
@@ -137,6 +179,31 @@ func (cur *Rollout) Step(prev *Rollout) *Rollout {
 	return ro
 }
 
+// adjustPercentage updates the rollout with the new percentage values.
+// If new percentage is larger than the previous, the last revision gets
+// the difference, if it is decreasing then we start removing traffic from
+// the older revisions.
+func adjustPercentage(goal int, cr *ConfigurationRollout) {
+	switch diff := goal - cr.Percent; {
+	case diff > 0:
+		cr.Revisions[len(cr.Revisions)-1].Percent += diff
+	case diff < 0:
+		diff = -diff // To make logic more natural.
+		i := 0
+		for diff > 0 && i < len(cr.Revisions) {
+			if cr.Revisions[i].Percent > diff {
+				cr.Revisions[i].Percent -= diff
+				break
+			}
+			diff -= cr.Revisions[i].Percent
+			i++
+		}
+		cr.Revisions = cr.Revisions[i:]
+	default: // diff = 0
+		// noop
+	}
+}
+
 // stepConfig takes previous and goal configuration shapes and returns a new
 // config rollout, after computing the percetage allocations.
 func stepConfig(goal, prev *ConfigurationRollout) *ConfigurationRollout {
@@ -145,14 +212,30 @@ func stepConfig(goal, prev *ConfigurationRollout) *ConfigurationRollout {
 		ConfigurationName: goal.ConfigurationName,
 		Tag:               goal.Tag,
 		Percent:           goal.Percent,
+		Revisions:         goal.Revisions,
+
+		// If there is a new revision, then timing information should be reset.
+		// So leave them empty here and populate below, if necessary.
+	}
+
+	if len(prev.Revisions) > 0 {
+		adjustPercentage(goal.Percent, prev)
 	}
 	// goal will always have just one revision in the list – the current desired revision.
-	if goal.Revisions[0].RevisionName == prev.Revisions[pc-1].RevisionName {
-		// TODO(vagababov): here would go the logic to compute new percentages for the rollout,
-		// i.e step function, so return value will change, depending on that.
-		// TODO(vagababov): percentage might change, so this should trigger recompute of existing
-		// revision rollouts.
-		ret.Revisions = goal.Revisions
+	// If it matches the last revision of the previous rollout state (or there were no revisions)
+	// then no new rollout has begun for this configuration.
+	if len(prev.Revisions) == 0 || goal.Revisions[0].RevisionName == prev.Revisions[pc-1].RevisionName {
+		if len(prev.Revisions) > 0 {
+			ret.Revisions = prev.Revisions
+
+			// TODO(vagababov): here would go the logic to compute new percentages for the rollout,
+			// i.e step function, so return value will change, depending on that.
+			// Copy the duration info from the previous when no new revision
+			// has been created.
+			ret.Deadline = prev.Deadline
+			ret.LastStepTime = prev.LastStepTime
+			ret.StepDuration = prev.StepDuration
+		}
 		return ret
 	}
 

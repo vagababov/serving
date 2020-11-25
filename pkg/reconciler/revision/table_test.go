@@ -38,7 +38,6 @@ import (
 	tracingconfig "knative.dev/pkg/tracing/config"
 	asv1a1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	defaultconfig "knative.dev/serving/pkg/apis/config"
-	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	"knative.dev/serving/pkg/autoscaler/config/autoscalerconfig"
 	servingclient "knative.dev/serving/pkg/client/injection/client"
@@ -387,7 +386,7 @@ func TestReconcile(t *testing.T) {
 		Objects: []runtime.Object{
 			Revision("foo", "fix-mutated-pa",
 				WithK8sServiceName("ill-follow-the-sun"), WithLogURL, MarkRevisionReady,
-				WithRevisionLabel(serving.RouteLabelKey, "foo")),
+				WithRoutingState(v1.RoutingStateActive)),
 			pa("foo", "fix-mutated-pa", WithProtocolType(networking.ProtocolH2C),
 				WithTraffic, WithPASKSReady, WithScaleTargetInitialized, WithReachabilityReachable,
 				WithPAStatusService("fix-mutated-pa")),
@@ -400,7 +399,7 @@ func TestReconcile(t *testing.T) {
 				// When our reconciliation has to change the service
 				// we should see the following mutations to status.
 				WithK8sServiceName("fix-mutated-pa"),
-				WithRevisionLabel(serving.RouteLabelKey, "foo"), WithLogURL, MarkRevisionReady,
+				WithRoutingState(v1.RoutingStateActive), WithLogURL, MarkRevisionReady,
 				withDefaultContainerStatuses()),
 		}},
 		WantUpdates: []clientgotesting.UpdateActionImpl{{
@@ -646,7 +645,7 @@ func TestReconcile(t *testing.T) {
 			listers.GetRevisionLister(), controller.GetEventRecorder(ctx), r,
 			controller.Options{
 				ConfigStore: &testConfigStore{
-					config: ReconcilerTestConfig(),
+					config: reconcilerTestConfig(),
 				},
 			})
 	}))
@@ -727,7 +726,7 @@ type configOption func(*config.Config)
 
 func deploy(t *testing.T, namespace, name string, opts ...interface{}) *appsv1.Deployment {
 	t.Helper()
-	cfg := ReconcilerTestConfig()
+	cfg := reconcilerTestConfig()
 
 	for _, opt := range opts {
 		if configOpt, ok := opt.(configOption); ok {
@@ -754,7 +753,7 @@ func deploy(t *testing.T, namespace, name string, opts ...interface{}) *appsv1.D
 }
 
 func image(namespace, name string, co ...configOption) *caching.Image {
-	config := ReconcilerTestConfig()
+	config := reconcilerTestConfig()
 	for _, opt := range co {
 		opt(config)
 	}
@@ -800,13 +799,12 @@ func (t *testConfigStore) ToContext(ctx context.Context) context.Context {
 
 var _ pkgreconciler.ConfigStore = (*testConfigStore)(nil)
 
-func ReconcilerTestConfig() *config.Config {
+func reconcilerTestConfig() *config.Config {
 	return &config.Config{
 		Config: &defaultconfig.Config{
 			Defaults: &defaultconfig.Defaults{},
 			Autoscaler: &autoscalerconfig.Config{
-				InitialScale:          1,
-				AllowZeroInitialScale: false,
+				InitialScale: 1,
 			},
 		},
 		Deployment: testDeploymentConfig(),

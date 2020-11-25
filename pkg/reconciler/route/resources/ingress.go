@@ -64,6 +64,23 @@ func MakeIngress(
 	ingressClass string,
 	acmeChallenges ...netv1alpha1.HTTP01Challenge,
 ) (*netv1alpha1.Ingress, error) {
+	return MakeIngressWithRollout(
+		// If no rollout is specified, we just build the default one.
+		ctx, r, tc, tc.BuildRollout(), tls, ingressClass, acmeChallenges...)
+}
+
+// MakeIngressWithRollout builds a KIngress object from the given parameters.
+// When building the ingress the builder will take into the account
+// the desired rollout state to split the traffic.
+func MakeIngressWithRollout(
+	ctx context.Context,
+	r *servingv1.Route,
+	tc *traffic.Config,
+	ro *traffic.Rollout,
+	tls []netv1alpha1.IngressTLS,
+	ingressClass string,
+	acmeChallenges ...netv1alpha1.HTTP01Challenge,
+) (*netv1alpha1.Ingress, error) {
 	spec, err := makeIngressSpec(ctx, r, tls, tc, acmeChallenges...)
 	if err != nil {
 		return nil, err
@@ -78,7 +95,7 @@ func MakeIngress(
 			}),
 			Annotations: kmeta.FilterMap(kmeta.UnionMaps(map[string]string{
 				networking.IngressClassAnnotationKey: ingressClass,
-				networking.RolloutAnnotationKey:      serializeRollout(ctx, tc.BuildRollout()),
+				networking.RolloutAnnotationKey:      serializeRollout(ctx, ro),
 			}, r.GetAnnotations()), func(key string) bool {
 				return key == corev1.LastAppliedConfigAnnotation
 			}),
@@ -91,7 +108,7 @@ func MakeIngress(
 func serializeRollout(ctx context.Context, r *traffic.Rollout) string {
 	sr, err := json.Marshal(r)
 	if err != nil {
-		// This must not never happen in the normal course of things.
+		// This must never happen in the normal course of things.
 		logging.FromContext(ctx).Warnw("Error serializing Rollout: "+spew.Sprint(r),
 			zap.Error(err))
 		return ""
@@ -260,7 +277,7 @@ func makeBaseIngressPath(ns string, targets traffic.RevisionTargets) *netv1alpha
 	// Optimistically allocate |targets| elements.
 	splits := make([]netv1alpha1.IngressBackendSplit, 0, len(targets))
 	for _, t := range targets {
-		if t.Percent == nil || *t.Percent == 0 {
+		if *t.Percent == 0 {
 			continue
 		}
 

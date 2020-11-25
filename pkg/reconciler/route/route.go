@@ -41,7 +41,6 @@ import (
 	pkgreconciler "knative.dev/pkg/reconciler"
 	"knative.dev/pkg/system"
 	"knative.dev/pkg/tracker"
-	cfgmap "knative.dev/serving/pkg/apis/config"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	clientset "knative.dev/serving/pkg/client/clientset/versioned"
 	routereconciler "knative.dev/serving/pkg/client/injection/reconciler/serving/v1/route"
@@ -127,14 +126,6 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, r *v1.Route) pkgreconcil
 		return err
 	}
 
-	if config.FromContextOrDefaults(ctx).Features.ResponsiveRevisionGC != cfgmap.Enabled {
-		// In all cases we will add annotations to the referred targets.  This is so that when they become
-		// routable we can know (through a listener) and attempt traffic configuration again.
-		if err := c.reconcileTargetRevisions(ctx, traffic, r); err != nil {
-			return err
-		}
-	}
-
 	r.Status.Address = &duckv1.Addressable{
 		URL: &apis.URL{
 			Scheme: "http",
@@ -154,8 +145,7 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, r *v1.Route) pkgreconcil
 	}
 
 	// Reconcile ingress and its children resources.
-	ingress, err := c.reconcileIngressResources(ctx, r, traffic, tls, ingressClassForRoute(ctx, r), acmeChallenges...)
-
+	ingress, err := c.reconcileIngress(ctx, r, traffic, tls, ingressClassForRoute(ctx, r), acmeChallenges...)
 	if err != nil {
 		return err
 	}
@@ -173,22 +163,6 @@ func (c *Reconciler) ReconcileKind(ctx context.Context, r *v1.Route) pkgreconcil
 
 	logger.Info("Route successfully synced")
 	return nil
-}
-
-func (c *Reconciler) reconcileIngressResources(ctx context.Context, r *v1.Route, tc *traffic.Config, tls []netv1alpha1.IngressTLS,
-	ingressClass string, acmeChallenges ...netv1alpha1.HTTP01Challenge) (*netv1alpha1.Ingress, error) {
-
-	desired, err := resources.MakeIngress(ctx, r, tc, tls, ingressClass, acmeChallenges...)
-	if err != nil {
-		return nil, err
-	}
-
-	ingress, err := c.reconcileIngress(ctx, r, desired)
-	if err != nil {
-		return nil, err
-	}
-
-	return ingress, nil
 }
 
 func (c *Reconciler) tls(ctx context.Context, host string, r *v1.Route, traffic *traffic.Config) ([]netv1alpha1.IngressTLS, []netv1alpha1.HTTP01Challenge, error) {

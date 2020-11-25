@@ -238,7 +238,7 @@ function install_knative_serving_standard() {
     install_kong || return 1
   else
     if [[ "$1" == "HEAD" ]]; then
-      install_istio "./third_party/net-istio.yaml" || return 1
+      install_istio "./third_party/istio-latest/net-istio.yaml" || return 1
     else
       # Download the latest release of net-istio.
       local url="https://github.com/knative/net-istio/releases/download/${LATEST_NET_ISTIO_RELEASE_VERSION}"
@@ -406,8 +406,6 @@ function test_setup() {
   if (( MESH )); then
     kubectl label namespace serving-tests istio-injection=enabled
     kubectl label namespace serving-tests-alt istio-injection=enabled
-    kubectl label namespace serving-tests-security istio-injection=enabled
-    ko apply ${KO_FLAGS} -f ${TEST_CONFIG_DIR}/security/ --selector=test.knative.dev/dependency=istio-sidecar || return 1
   fi
 
   echo ">> Uploading test images..."
@@ -418,6 +416,12 @@ function test_setup() {
 
   echo ">> Waiting for Ingress provider to be running..."
   wait_until_ingress_running || return 1
+}
+
+# Apply the logging config for testing. This should be called after test_setup has been triggered.
+function test_logging_config_setup() {
+  echo ">> Setting up test logging config..."
+  ko apply ${KO_FLAGS} -f ${TMP_DIR}/test/config/config-logging.yaml || return 1
 }
 
 # Delete test resources
@@ -433,8 +437,6 @@ function test_teardown() {
   kubectl delete --ignore-not-found --now --timeout 60s namespace serving-tests
   kubectl delete all --all --ignore-not-found --now --timeout 60s -n serving-tests-alt
   kubectl delete --ignore-not-found --now --timeout 60s namespace serving-tests-alt
-  kubectl delete all --all --ignore-not-found --now --timeout 60s -n serving-tests-security
-  kubectl delete --ignore-not-found --now --timeout 60s namespace serving-tests-security
 }
 
 # Dump more information when test fails.

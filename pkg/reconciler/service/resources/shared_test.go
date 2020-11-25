@@ -40,7 +40,7 @@ const (
 func expectOwnerReferencesSetCorrectly(t *testing.T, ownerRefs []metav1.OwnerReference) {
 	t.Helper()
 	if got, want := len(ownerRefs), 1; got != want {
-		t.Errorf("expected %d owner refs got %d", want, got)
+		t.Errorf("|Owner refs| = %d, want: %d", got, want)
 		return
 	}
 
@@ -69,7 +69,11 @@ func createConfiguration(containerName string) *v1.ConfigurationSpec {
 }
 
 func createService() *v1.Service {
-	return DefaultService(testServiceName, testServiceNamespace,
+	return createServiceWithName(testServiceName)
+}
+
+func createServiceWithName(name string) *v1.Service {
+	return DefaultService(name, testServiceNamespace,
 		WithConfigSpec(createConfiguration(testContainerName)),
 		WithRouteSpec(v1.RouteSpec{
 			Traffic: []v1.TrafficTarget{{
