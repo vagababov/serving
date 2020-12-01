@@ -36,6 +36,7 @@ import (
 
 	pkgTest "knative.dev/pkg/test"
 	"knative.dev/pkg/test/ingress"
+	"knative.dev/pkg/test/spoof"
 	"knative.dev/serving/pkg/apis/autoscaling"
 	resourcenames "knative.dev/serving/pkg/reconciler/revision/resources/names"
 	"knative.dev/serving/pkg/resources"
@@ -48,6 +49,7 @@ const (
 	// Concurrency must be high enough to avoid the problems with sampling
 	// but not high enough to generate scheduling problems.
 	containerConcurrency = 6
+	rpsTarget            = 10
 	targetUtilization    = 0.7
 	successRateSLO       = 0.999
 	autoscaleSleep       = 500
@@ -234,7 +236,7 @@ func SetupSvc(t *testing.T, class, metric string, target int, targetUtilization 
 		clients.KubeClient,
 		t.Logf,
 		names.URL,
-		v1test.RetryingRouteInconsistency(pkgTest.MatchesAllOf(pkgTest.IsStatusOK)),
+		v1test.RetryingRouteInconsistency(spoof.MatchesAllOf(spoof.IsStatusOK)),
 		"CheckingEndpointAfterCreate",
 		test.ServingFlags.ResolvableDomain,
 		test.AddRootCAtoTransport(context.Background(), t.Logf, clients, test.ServingFlags.HTTPS),

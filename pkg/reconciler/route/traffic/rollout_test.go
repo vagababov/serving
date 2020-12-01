@@ -22,12 +22,16 @@ limitations under the License.
 package traffic
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestStep(t *testing.T) {
+	now := int(time.Now().UnixNano())
 	tests := []struct {
 		name            string
 		prev, cur, want *Rollout
@@ -77,6 +81,7 @@ func TestStep(t *testing.T) {
 				Deadline:     2006, // <- Those should be ignored.
 				LastStepTime: 2009,
 				StepDuration: 2020,
+				StartTime:    2004,
 			}},
 		},
 		prev: &Rollout{
@@ -90,6 +95,7 @@ func TestStep(t *testing.T) {
 				Deadline:     1982, // <- Those should be copied.
 				LastStepTime: 1984,
 				StepDuration: 1988,
+				StartTime:    1955,
 			}},
 		},
 		want: &Rollout{
@@ -103,6 +109,7 @@ func TestStep(t *testing.T) {
 				Deadline:     1982,
 				LastStepTime: 1984,
 				StepDuration: 1988,
+				StartTime:    1955,
 			}},
 		},
 	}, {
@@ -196,6 +203,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
 				Percent:           100,
+				StartTime:         now,
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
 					Percent:      99,
@@ -234,6 +242,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
 				Percent:           33,
+				StartTime:         now,
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
 					Percent:      2,
@@ -274,6 +283,7 @@ func TestStep(t *testing.T) {
 		want: &Rollout{
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
+				StartTime:         now,
 				Percent:           75,
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
@@ -313,6 +323,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "brian",
 				Percent:           70,
+				StartTime:         now,
 				Revisions: []RevisionRollout{{
 					RevisionName: "exile-on-main-st",
 					Percent:      69,
@@ -338,6 +349,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
 				Percent:           100,
+				StartTime:         now - 1982, // A rollout in progress, this would be set.
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
 					Percent:      95,
@@ -351,6 +363,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
 				Percent:           100,
+				StartTime:         now,
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
 					Percent:      95,
@@ -379,6 +392,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
 				Percent:           100,
+				StartTime:         now - 1984, // A rollout in progress, this would be set.
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
 					Percent:      99,
@@ -391,6 +405,7 @@ func TestStep(t *testing.T) {
 		want: &Rollout{
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "mick",
+				StartTime:         now,
 				Percent:           100,
 				Revisions: []RevisionRollout{{
 					RevisionName: "goat-head-soup",
@@ -560,6 +575,7 @@ func TestStep(t *testing.T) {
 			Configurations: []ConfigurationRollout{{
 				ConfigurationName: "keith",
 				Percent:           99,
+				StartTime:         now,
 				Revisions: []RevisionRollout{{ // <-- note this one actually rolls.
 					RevisionName: "can't-get-no-satisfaction",
 					Percent:      98,
@@ -672,8 +688,8 @@ func TestStep(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.cur.Step(tc.prev)
-			if want := tc.want; !cmp.Equal(got, want) {
+			got := tc.cur.Step(tc.prev, now)
+			if want := tc.want; !cmp.Equal(got, want, cmpopts.EquateEmpty()) {
 				t.Errorf("Wrong rolled rollout, diff(-want,+got):\n%s", cmp.Diff(want, got))
 			}
 			if !got.Validate() {
@@ -681,6 +697,40 @@ func TestStep(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObserveReady(t *testing.T) {
+	const (
+		now       = 200620092020 + 1982
+		oldenDays = 198219841988
+	)
+	ro := Rollout{
+		Configurations: []ConfigurationRollout{{
+			ConfigurationName: "has-step",
+			StepDuration:      11,
+		}, {
+			ConfigurationName: "no-step-no-begin",
+		}, {
+			ConfigurationName: "step-begin < 1s",
+			StartTime:         200620092020,
+		}, {
+			ConfigurationName: "step-begin > 1s",
+			StartTime:         oldenDays,
+		}},
+	}
+
+	want := ro
+	want.Configurations[2].StepDuration = 1
+	want.Configurations[3].StepDuration = 3 // 2.4 rounded up.
+
+	// This works in place.
+	ro.ObserveReady(now)
+
+	if !cmp.Equal(ro, want) {
+		t.Errorf("ObserveReady generated mismatched config: diff(-want,+got):\n%s",
+			cmp.Diff(want, ro))
+	}
+
 }
 
 func TestAdjustPercentage(t *testing.T) {
@@ -798,12 +848,11 @@ func TestAdjustPercentage(t *testing.T) {
 				Percent: 60,
 			}},
 		},
-		want: []RevisionRollout{},
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			adjustPercentage(tc.goal, tc.prev)
-			if got, want := tc.prev.Revisions, tc.want; !cmp.Equal(got, want) {
+			if got, want := tc.prev.Revisions, tc.want; !cmp.Equal(got, want, cmpopts.EquateEmpty()) {
 				t.Errorf("Rollout Mistmatch(-want,+got):\n%s", cmp.Diff(want, got))
 			}
 		})
@@ -883,4 +932,85 @@ func TestValidateFailures(t *testing.T) {
 		})
 	}
 
+}
+
+func TestConfigDone(t *testing.T) {
+	r := &Rollout{
+		Configurations: []ConfigurationRollout{{
+			ConfigurationName: "one",
+			Percent:           100,
+			Revisions: []RevisionRollout{{
+				RevisionName: "roy",
+				Percent:      100,
+			}},
+		}, {
+			ConfigurationName: "no",
+			Percent:           0,
+			Revisions:         []RevisionRollout{},
+		}, {
+			ConfigurationName: "many",
+			Percent:           100,
+			Revisions: []RevisionRollout{{
+				RevisionName: "black-on-blue",
+				Percent:      83,
+			}, {
+				RevisionName: "flowers",
+				Percent:      17,
+			}},
+		}},
+	}
+	if !r.Configurations[0].Done() {
+		t.Error("Single revision rollout is not `Done`")
+	}
+	if !r.Configurations[1].Done() {
+		t.Error("Zero revisions rollout is not `Done`")
+	}
+	if r.Configurations[2].Done() {
+		t.Error("Many revisions rollout is `Done`")
+	}
+}
+
+func TestJSONRoundtrip(t *testing.T) {
+	orig := &Rollout{
+		Configurations: []ConfigurationRollout{{
+			ConfigurationName: "one",
+			Percent:           100,
+			Revisions: []RevisionRollout{{
+				RevisionName: "roy",
+				Percent:      100,
+			}},
+			StartTime:    1955,
+			Deadline:     2006,
+			LastStepTime: 1988,
+			StepDuration: 1984,
+		}, {
+			ConfigurationName: "no",
+			Percent:           0,
+			Revisions:         []RevisionRollout{},
+		}, {
+			ConfigurationName: "many",
+			Percent:           100,
+			Revisions: []RevisionRollout{{
+				RevisionName: "black-on-blue",
+				Percent:      83,
+			}, {
+				RevisionName: "flowers",
+				Percent:      17,
+			}},
+		}},
+	}
+
+	ss, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatal("Error serializing the rollout:", err)
+	}
+	deserialized := &Rollout{}
+	err = json.Unmarshal(ss, deserialized)
+	if err != nil {
+		t.Fatal("Error deserializing proper JSON:", err)
+	}
+	if !cmp.Equal(deserialized, orig, cmpopts.EquateEmpty()) {
+		t.Errorf("JSON roundtrip mismatch:(-want,+got)\n%s",
+			cmp.Diff(orig, deserialized, cmpopts.EquateEmpty()))
+	}
 }
