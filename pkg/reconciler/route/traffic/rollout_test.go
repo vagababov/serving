@@ -22,6 +22,7 @@ limitations under the License.
 package traffic
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -990,7 +991,7 @@ func TestStep(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, gotNS := tc.cur.Step(tc.prev, now)
+			got, gotNS := tc.cur.Step(context.Background(), tc.prev, now)
 			if want := tc.want; !cmp.Equal(got, want, cmpopts.EquateEmpty()) {
 				t.Errorf("Wrong rolled rollout, diff(-want,+got):\n%s", cmp.Diff(want, got))
 			}
