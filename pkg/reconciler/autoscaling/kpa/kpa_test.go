@@ -1129,30 +1129,6 @@ func TestReconcile(t *testing.T) {
 				WithPAMetricsService(privateSvc), WithObservedGeneration(1),
 			),
 		}},
-	}, {
-		Name: "mark initial scale reached for an existing inactive PA",
-		Key:  key,
-		Ctx: context.WithValue(context.Background(), deciderKey{},
-			decider(testNamespace, testRevision, -1, /* desiredScale */
-				-42 /* ebc */, scaling.MinActivators)),
-		Objects: []runtime.Object{
-			kpa(testNamespace, testRevision, WithNoTraffic(noTrafficReason, "The target is not receiving traffic."),
-				withScales(0, -1), WithReachabilityReachable, WithPAStatusService(testRevision), WithPAMetricsService(privateSvc),
-				WithPASKSReady,
-			),
-			sks(testNamespace, testRevision, WithDeployRef(deployName), WithProxyMode, WithSKSReady),
-			metric(testNamespace, testRevision),
-			deploy(testNamespace, testRevision, func(d *appsv1.Deployment) {
-				d.Spec.Replicas = ptr.Int32(2)
-			}),
-		},
-		WantStatusUpdates: []clientgotesting.UpdateActionImpl{{
-			Object: kpa(testNamespace, testRevision, WithNoTraffic(noTrafficReason, "The target is not receiving traffic."),
-				WithPASKSReady, markScaleTargetInitialized,
-				withScales(0, -1), WithReachabilityReachable, WithPAStatusService(testRevision),
-				WithPAMetricsService(privateSvc), WithObservedGeneration(1),
-			),
-		}},
 	}}
 
 	table.Test(t, MakeFactory(func(ctx context.Context, listers *Listers, cmw configmap.Watcher) controller.Reconciler {
@@ -1671,7 +1647,7 @@ func (km *testDeciders) Create(ctx context.Context, decider *scaling.Decider) (*
 	return decider, nil
 }
 
-func (km *testDeciders) Delete(ctx context.Context, namespace, name string) error {
+func (km *testDeciders) Delete(ctx context.Context, namespace, name string) {
 	km.mutex.Lock()
 	defer km.mutex.Unlock()
 
@@ -1681,7 +1657,6 @@ func (km *testDeciders) Delete(ctx context.Context, namespace, name string) erro
 		km.deleteBeforeCreate.Store(true)
 	}
 	km.deleteCall <- struct{}{}
-	return nil
 }
 
 func (km *testDeciders) Update(ctx context.Context, decider *scaling.Decider) (*scaling.Decider, error) {
@@ -1699,7 +1674,6 @@ func (km *testDeciders) Watch(fn func(types.NamespacedName)) {}
 type failingDeciders struct {
 	getErr    error
 	createErr error
-	deleteErr error
 }
 
 func (km *failingDeciders) Get(ctx context.Context, namespace, name string) (*scaling.Decider, error) {
@@ -1710,9 +1684,7 @@ func (km *failingDeciders) Create(ctx context.Context, decider *scaling.Decider)
 	return nil, km.createErr
 }
 
-func (km *failingDeciders) Delete(ctx context.Context, namespace, name string) error {
-	return km.deleteErr
-}
+func (km *failingDeciders) Delete(ctx context.Context, namespace, name string) {}
 
 func (km *failingDeciders) Watch(fn func(types.NamespacedName)) {
 }

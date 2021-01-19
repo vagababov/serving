@@ -25,22 +25,17 @@ import (
 	"knative.dev/networking/pkg/apis/networking"
 	netv1alpha1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
 	"knative.dev/pkg/kmeta"
-	pkgnetwork "knative.dev/pkg/network"
+	"knative.dev/serving/pkg/apis/serving"
 	servingv1alpha1 "knative.dev/serving/pkg/apis/serving/v1alpha1"
+	routeresources "knative.dev/serving/pkg/reconciler/route/resources"
 )
 
-// MakeIngress creates an Ingress object for a DomainMapping.
-func MakeIngress(dm *servingv1alpha1.DomainMapping, ingressClass string) *netv1alpha1.Ingress {
-	var (
-		targetServiceName      = dm.Spec.Ref.Name
-		targetServiceNamespace = dm.Spec.Ref.Namespace
-	)
-
-	// This assumes the target is a KSvc. To support arbitrary addressables
-	// we will need to resolve the reference to a URL in the same way that
-	// eventing does.
-	targetHostName := pkgnetwork.GetServiceHostname(targetServiceName, targetServiceNamespace)
-
+// MakeIngress creates an Ingress object for a DomainMapping.  The Ingress is
+// always created in the same namespace as the DomainMapping, and the ingress
+// backend is always in the same namespace also (as this is required by
+// KIngress).  The created ingress will contain a RewriteHost rule to cause the
+// given hostName to be used as the host.
+func MakeIngress(dm *servingv1alpha1.DomainMapping, backendServiceName, hostName, ingressClass string, tls []netv1alpha1.IngressTLS, acmeChallenges ...netv1alpha1.HTTP01Challenge) *netv1alpha1.Ingress {
 	return &netv1alpha1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      kmeta.ChildName(dm.GetName(), ""),
@@ -50,27 +45,31 @@ func MakeIngress(dm *servingv1alpha1.DomainMapping, ingressClass string) *netv1a
 			}, dm.GetAnnotations()), func(key string) bool {
 				return key == corev1.LastAppliedConfigAnnotation
 			}),
+			Labels: kmeta.UnionMaps(dm.Labels, map[string]string{
+				serving.DomainMappingLabelKey: dm.Name,
+			}),
 			OwnerReferences: []metav1.OwnerReference{*kmeta.NewControllerRef(dm)},
 		},
 		Spec: netv1alpha1.IngressSpec{
+			TLS: tls,
 			Rules: []netv1alpha1.IngressRule{{
 				Hosts:      []string{dm.Name},
 				Visibility: netv1alpha1.IngressVisibilityExternalIP,
 				HTTP: &netv1alpha1.HTTPIngressRuleValue{
-					Paths: []netv1alpha1.HTTPIngressPath{{
-						RewriteHost: targetHostName,
+					Paths: append([]netv1alpha1.HTTPIngressPath{{
+						RewriteHost: hostName,
 						Splits: []netv1alpha1.IngressBackendSplit{{
 							Percent: 100,
 							AppendHeaders: map[string]string{
 								network.OriginalHostHeader: dm.Name,
 							},
 							IngressBackend: netv1alpha1.IngressBackend{
-								ServiceName:      targetServiceName,
-								ServiceNamespace: targetServiceNamespace,
+								ServiceNamespace: dm.Namespace,
+								ServiceName:      backendServiceName,
 								ServicePort:      intstr.FromInt(80),
 							},
 						}},
-					}},
+					}}, routeresources.MakeACMEIngressPaths(acmeChallenges, dm.GetName())...),
 				},
 			}},
 		},

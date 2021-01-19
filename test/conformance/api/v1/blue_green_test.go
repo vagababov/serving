@@ -30,6 +30,7 @@ import (
 
 	"knative.dev/pkg/ptr"
 	pkgTest "knative.dev/pkg/test"
+	"knative.dev/pkg/test/spoof"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	rtesting "knative.dev/serving/pkg/testing/v1"
 	"knative.dev/serving/test"
@@ -134,7 +135,7 @@ func TestBlueGreenRoute(t *testing.T) {
 		clients.KubeClient,
 		t.Logf,
 		greenURL,
-		v1test.RetryingRouteInconsistency(pkgTest.IsStatusOK),
+		v1test.RetryingRouteInconsistency(spoof.IsStatusOK),
 		"WaitForSuccessfulResponse",
 		test.ServingFlags.ResolvableDomain,
 		test.AddRootCAtoTransport(context.Background(), t.Logf, clients, test.ServingFlags.HTTPS)); err != nil {
@@ -145,15 +146,15 @@ func TestBlueGreenRoute(t *testing.T) {
 	g, egCtx := errgroup.WithContext(context.Background())
 	g.Go(func() error {
 		min := int(math.Floor(test.ConcurrentRequests * test.MinSplitPercentage))
-		return shared.CheckDistribution(egCtx, t, clients, tealURL, test.ConcurrentRequests, min, []string{expectedBlue, expectedGreen})
+		return shared.CheckDistribution(egCtx, t, clients, tealURL, test.ConcurrentRequests, min, []string{expectedBlue, expectedGreen}, test.ServingFlags.ResolvableDomain)
 	})
 	g.Go(func() error {
 		min := int(math.Floor(test.ConcurrentRequests * test.MinDirectPercentage))
-		return shared.CheckDistribution(egCtx, t, clients, blueURL, test.ConcurrentRequests, min, []string{expectedBlue})
+		return shared.CheckDistribution(egCtx, t, clients, blueURL, test.ConcurrentRequests, min, []string{expectedBlue}, test.ServingFlags.ResolvableDomain)
 	})
 	g.Go(func() error {
 		min := int(math.Floor(test.ConcurrentRequests * test.MinDirectPercentage))
-		return shared.CheckDistribution(egCtx, t, clients, greenURL, test.ConcurrentRequests, min, []string{expectedGreen})
+		return shared.CheckDistribution(egCtx, t, clients, greenURL, test.ConcurrentRequests, min, []string{expectedGreen}, test.ServingFlags.ResolvableDomain)
 	})
 	if err := g.Wait(); err != nil {
 		t.Fatal("Error sending requests:", err)

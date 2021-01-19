@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -71,13 +72,12 @@ func (ac *reconciler) Reconcile(ctx context.Context, key string) error {
 	logger := logging.FromContext(ctx)
 
 	if !ac.IsLeaderFor(ac.key) {
-		logger.Debugf("Skipping key %q, not the leader.", ac.key)
-		return nil
+		return controller.NewSkipKey(key)
 	}
 
 	secret, err := ac.secretlister.Secrets(system.Namespace()).Get(ac.secretName)
 	if err != nil {
-		logger.Error("Error fetching secret: ", err)
+		logger.Errorw("Error fetching secret ", zap.Error(err))
 		return err
 	}
 

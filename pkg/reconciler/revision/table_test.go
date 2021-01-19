@@ -19,11 +19,13 @@ package revision
 import (
 	"context"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/clock"
 	clientgotesting "k8s.io/client-go/testing"
 
 	caching "knative.dev/caching/pkg/apis/caching/v1alpha1"
@@ -38,7 +40,6 @@ import (
 	tracingconfig "knative.dev/pkg/tracing/config"
 	asv1a1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	defaultconfig "knative.dev/serving/pkg/apis/config"
-	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	"knative.dev/serving/pkg/autoscaler/config/autoscalerconfig"
 	servingclient "knative.dev/serving/pkg/client/injection/client"
@@ -54,6 +55,10 @@ import (
 
 // This is heavily based on the way the OpenShift Ingress controller tests its reconciliation method.
 func TestReconcile(t *testing.T) {
+	// We don't care about the value, but that it does not change,
+	// since it leads to flakes.
+	fc := clock.NewFakeClock(time.Now())
+
 	table := TableTest{{
 		Name: "bad workqueue key",
 		// Make sure Reconcile handles bad keys.
@@ -387,7 +392,7 @@ func TestReconcile(t *testing.T) {
 		Objects: []runtime.Object{
 			Revision("foo", "fix-mutated-pa",
 				WithK8sServiceName("ill-follow-the-sun"), WithLogURL, MarkRevisionReady,
-				WithRevisionLabel(serving.RouteLabelKey, "foo")),
+				WithRoutingState(v1.RoutingStateActive, fc)),
 			pa("foo", "fix-mutated-pa", WithProtocolType(networking.ProtocolH2C),
 				WithTraffic, WithPASKSReady, WithScaleTargetInitialized, WithReachabilityReachable,
 				WithPAStatusService("fix-mutated-pa")),
@@ -400,7 +405,7 @@ func TestReconcile(t *testing.T) {
 				// When our reconciliation has to change the service
 				// we should see the following mutations to status.
 				WithK8sServiceName("fix-mutated-pa"),
-				WithRevisionLabel(serving.RouteLabelKey, "foo"), WithLogURL, MarkRevisionReady,
+				WithRoutingState(v1.RoutingStateActive, fc), WithLogURL, MarkRevisionReady,
 				withDefaultContainerStatuses()),
 		}},
 		WantUpdates: []clientgotesting.UpdateActionImpl{{
@@ -646,7 +651,7 @@ func TestReconcile(t *testing.T) {
 			listers.GetRevisionLister(), controller.GetEventRecorder(ctx), r,
 			controller.Options{
 				ConfigStore: &testConfigStore{
-					config: ReconcilerTestConfig(),
+					config: reconcilerTestConfig(),
 				},
 			})
 	}))
@@ -727,7 +732,7 @@ type configOption func(*config.Config)
 
 func deploy(t *testing.T, namespace, name string, opts ...interface{}) *appsv1.Deployment {
 	t.Helper()
-	cfg := ReconcilerTestConfig()
+	cfg := reconcilerTestConfig()
 
 	for _, opt := range opts {
 		if configOpt, ok := opt.(configOption); ok {
@@ -754,7 +759,7 @@ func deploy(t *testing.T, namespace, name string, opts ...interface{}) *appsv1.D
 }
 
 func image(namespace, name string, co ...configOption) *caching.Image {
-	config := ReconcilerTestConfig()
+	config := reconcilerTestConfig()
 	for _, opt := range co {
 		opt(config)
 	}
@@ -800,13 +805,12 @@ func (t *testConfigStore) ToContext(ctx context.Context) context.Context {
 
 var _ pkgreconciler.ConfigStore = (*testConfigStore)(nil)
 
-func ReconcilerTestConfig() *config.Config {
+func reconcilerTestConfig() *config.Config {
 	return &config.Config{
 		Config: &defaultconfig.Config{
 			Defaults: &defaultconfig.Defaults{},
 			Autoscaler: &autoscalerconfig.Config{
-				InitialScale:          1,
-				AllowZeroInitialScale: false,
+				InitialScale: 1,
 			},
 		},
 		Deployment: testDeploymentConfig(),

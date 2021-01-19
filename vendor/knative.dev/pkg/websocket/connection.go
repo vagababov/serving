@@ -20,8 +20,10 @@ import (
 	"bytes"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net/http/httputil"
 	"sync"
 	"time"
 
@@ -133,9 +135,15 @@ func NewDurableConnection(target string, messageChan chan []byte, logger *zap.Su
 			// by restarting the serving side of the connection behind a Kubernetes Service.
 			HandshakeTimeout: 3 * time.Second,
 		}
-		conn, _, err := dialer.Dial(target, nil)
+		conn, resp, err := dialer.Dial(target, nil)
 		if err != nil {
-			logger.Errorw("Websocket connection could not be established", zap.Error(err))
+			if resp != nil {
+				dresp, _ := httputil.DumpResponse(resp, true /*body*/) // This is for logging so don't care if it fails.
+				logger.Errorw("Websocket connection could not be established", zap.Error(err),
+					zap.String("request", string(dresp)))
+			} else {
+				logger.Errorw("Websocket connection could not be established", zap.Error(err))
+			}
 		}
 		return conn, err
 	}
@@ -158,7 +166,7 @@ func NewDurableConnection(target string, messageChan chan []byte, logger *zap.Su
 				}
 				logger.Debug("Connected to ", target)
 				if err := c.keepalive(); err != nil {
-					logger.With(zap.Error(err)).Errorf("Connection to %s broke down, reconnecting...", target)
+					logger.Errorw(fmt.Sprintf("Connection to %s broke down, reconnecting...", target), zap.Error(err))
 				}
 				if err := c.closeConnection(); err != nil {
 					logger.Errorw("Failed to close the connection after crashing", zap.Error(err))

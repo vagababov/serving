@@ -52,6 +52,8 @@ func abortOnTimeout(ctx context.Context) spoof.ResponseChecker {
 	}
 }
 
+// ScaleToWithin creates `scale` services in parallel subtests and reports the
+// time taken to `latencies`.
 func ScaleToWithin(t *testing.T, scale int, duration time.Duration, latencies Latencies) {
 	// These are the local (per-probe) and global (all probes) targets for the scale test.
 	// 95 = 19/20, so allow one failure within the minimum number of probes, but expect
@@ -185,7 +187,7 @@ func ScaleToWithin(t *testing.T, scale int, duration time.Duration, latencies La
 					clients.KubeClient,
 					t.Logf,
 					url,
-					v1test.RetryingRouteInconsistency(pkgTest.MatchesAllOf(pkgTest.IsStatusOK, pkgTest.MatchesBody(test.HelloWorldText), abortOnTimeout(ctx))),
+					v1test.RetryingRouteInconsistency(spoof.MatchesAllOf(spoof.IsStatusOK, spoof.MatchesBody(test.HelloWorldText), abortOnTimeout(ctx))),
 					"WaitForEndpointToServeText",
 					test.ServingFlags.ResolvableDomain)
 				if err != nil {

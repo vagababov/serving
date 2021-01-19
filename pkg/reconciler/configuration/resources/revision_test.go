@@ -27,10 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/clock"
 
 	"knative.dev/pkg/ptr"
-	cfgmap "knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
-	"knative.dev/serving/pkg/reconciler/configuration/config"
 )
 
 var fakeCurTime = time.Unix(1e9, 0)
@@ -51,6 +49,10 @@ func TestMakeRevisions(t *testing.T) {
 				Namespace:  "no",
 				Name:       "build",
 				Generation: 10,
+				Labels: map[string]string{
+					serving.ServiceUIDLabelKey: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+				},
+				UID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			},
 			Spec: v1.ConfigurationSpec{
 				Template: v1.RevisionTemplateSpec{
@@ -74,12 +76,15 @@ func TestMakeRevisions(t *testing.T) {
 					Name:               "build",
 					Controller:         ptr.Bool(true),
 					BlockOwnerDeletion: ptr.Bool(true),
+					UID:                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 				}},
 				Labels: map[string]string{
-					serving.RoutingStateLabelKey:            "pending",
 					serving.ConfigurationLabelKey:           "build",
 					serving.ConfigurationGenerationLabelKey: "10",
+					serving.ConfigurationUIDLabelKey:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+					serving.RoutingStateLabelKey:            "pending",
 					serving.ServiceLabelKey:                 "",
+					serving.ServiceUIDLabelKey:              "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 				},
 				Annotations: map[string]string{
 					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
@@ -100,6 +105,10 @@ func TestMakeRevisions(t *testing.T) {
 				Namespace:  "with",
 				Name:       "labels",
 				Generation: 100,
+				Labels: map[string]string{
+					serving.ServiceUIDLabelKey: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+				},
+				UID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			},
 			Spec: v1.ConfigurationSpec{
 				Template: v1.RevisionTemplateSpec{
@@ -121,20 +130,26 @@ func TestMakeRevisions(t *testing.T) {
 		},
 		want: &v1.Revision{
 			ObjectMeta: metav1.ObjectMeta{
-				Namespace:   "with",
-				Name:        "labels-00100",
-				Annotations: map[string]string{},
+				Namespace: "with",
+				Name:      "labels-00100",
+				Annotations: map[string]string{
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1.SchemeGroupVersion.String(),
 					Kind:               "Configuration",
 					Name:               "labels",
 					Controller:         ptr.Bool(true),
 					BlockOwnerDeletion: ptr.Bool(true),
+					UID:                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 				}},
 				Labels: map[string]string{
 					serving.ConfigurationLabelKey:           "labels",
 					serving.ConfigurationGenerationLabelKey: "100",
+					serving.ConfigurationUIDLabelKey:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+					serving.RoutingStateLabelKey:            "pending",
 					serving.ServiceLabelKey:                 "",
+					serving.ServiceUIDLabelKey:              "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 					"foo":                                   "bar",
 					"baz":                                   "blah",
 				},
@@ -154,6 +169,10 @@ func TestMakeRevisions(t *testing.T) {
 				Namespace:  "with",
 				Name:       "annotations",
 				Generation: 100,
+				Labels: map[string]string{
+					serving.ServiceUIDLabelKey: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+				},
+				UID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			},
 			Spec: v1.ConfigurationSpec{
 				Template: v1.RevisionTemplateSpec{
@@ -183,15 +202,20 @@ func TestMakeRevisions(t *testing.T) {
 					Name:               "annotations",
 					Controller:         ptr.Bool(true),
 					BlockOwnerDeletion: ptr.Bool(true),
+					UID:                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 				}},
 				Labels: map[string]string{
 					serving.ConfigurationLabelKey:           "annotations",
 					serving.ConfigurationGenerationLabelKey: "100",
+					serving.ConfigurationUIDLabelKey:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+					serving.RoutingStateLabelKey:            "pending",
 					serving.ServiceLabelKey:                 "",
+					serving.ServiceUIDLabelKey:              "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 				},
 				Annotations: map[string]string{
 					"foo": "bar",
 					"baz": "blah",
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
 				},
 			},
 			Spec: v1.RevisionSpec{
@@ -214,7 +238,11 @@ func TestMakeRevisions(t *testing.T) {
 					"serving.knative.dev/lastModifier": "someone",
 					serving.RoutesAnnotationKey:        "route",
 				},
+				Labels: map[string]string{
+					serving.ServiceUIDLabelKey: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+				},
 				Generation: 10,
+				UID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			},
 			Spec: v1.ConfigurationSpec{
 				Template: v1.RevisionTemplateSpec{
@@ -243,12 +271,15 @@ func TestMakeRevisions(t *testing.T) {
 					Name:               "config",
 					Controller:         ptr.Bool(true),
 					BlockOwnerDeletion: ptr.Bool(true),
+					UID:                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 				}},
 				Labels: map[string]string{
 					serving.ConfigurationLabelKey:           "config",
 					serving.ConfigurationGenerationLabelKey: "10",
-					serving.ServiceLabelKey:                 "",
+					serving.ConfigurationUIDLabelKey:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 					serving.RoutingStateLabelKey:            "active",
+					serving.ServiceLabelKey:                 "",
+					serving.ServiceUIDLabelKey:              "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 				},
 			},
 			Spec: v1.RevisionSpec{
@@ -269,7 +300,11 @@ func TestMakeRevisions(t *testing.T) {
 					"serving.knative.dev/creator":      "admin",
 					"serving.knative.dev/lastModifier": "someone",
 				},
+				Labels: map[string]string{
+					serving.ServiceUIDLabelKey: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+				},
 				Generation: 10,
+				UID:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 			},
 			Spec: v1.ConfigurationSpec{
 				Template: v1.RevisionTemplateSpec{
@@ -297,6 +332,7 @@ func TestMakeRevisions(t *testing.T) {
 					"serving.knative.dev/creator": "someone",
 					"foo":                         "bar",
 					"baz":                         "blah",
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
 				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1.SchemeGroupVersion.String(),
@@ -304,11 +340,15 @@ func TestMakeRevisions(t *testing.T) {
 					Name:               "config",
 					Controller:         ptr.Bool(true),
 					BlockOwnerDeletion: ptr.Bool(true),
+					UID:                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 				}},
 				Labels: map[string]string{
 					serving.ConfigurationLabelKey:           "config",
 					serving.ConfigurationGenerationLabelKey: "10",
+					serving.ConfigurationUIDLabelKey:        "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+					serving.RoutingStateLabelKey:            "pending",
 					serving.ServiceLabelKey:                 "",
+					serving.ServiceUIDLabelKey:              "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
 				},
 			},
 			Spec: v1.RevisionSpec{
@@ -323,29 +363,10 @@ func TestMakeRevisions(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
-			ctx = enableResponsiveGC(ctx, test.responsiveGC)
-
-			got := MakeRevision(ctx, test.configuration, clock)
+			got := MakeRevision(context.Background(), test.configuration, clock)
 			if diff := cmp.Diff(test.want, got); diff != "" {
 				t.Error("MakeRevision (-want, +got) =", diff)
 			}
 		})
 	}
-}
-
-func enableResponsiveGC(ctx context.Context, enabled bool) context.Context {
-	flag := cfgmap.Disabled
-	if enabled {
-		flag = cfgmap.Enabled
-	}
-
-	defaultDefaults, _ := cfgmap.NewDefaultsConfigFromMap(map[string]string{})
-	c := &config.Config{
-		Features: &cfgmap.Features{
-			ResponsiveRevisionGC: flag,
-		},
-		Defaults: defaultDefaults,
-	}
-	return config.ToContext(ctx, c)
 }

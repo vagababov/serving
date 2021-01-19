@@ -46,8 +46,6 @@ import (
 	autoscalercfg "knative.dev/serving/pkg/autoscaler/config"
 
 	. "knative.dev/pkg/reconciler/testing"
-	"knative.dev/serving/pkg/reconciler/configuration/config"
-	labelerv1 "knative.dev/serving/pkg/reconciler/labeler/v1"
 	labelerv2 "knative.dev/serving/pkg/reconciler/labeler/v2"
 	. "knative.dev/serving/pkg/reconciler/testing/v1"
 	. "knative.dev/serving/pkg/testing/v1"
@@ -56,20 +54,18 @@ import (
 func TestV2Reconcile(t *testing.T) {
 	now := metav1.Now()
 	fakeTime := now.Time
+	clock := clock.NewFakeClock(fakeTime)
 
 	table := TableTest{{
 		Name: "bad workqueue key",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Make sure Reconcile handles bad keys.
 		Key: "too/many/parts",
 	}, {
 		Name: "key not found",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Make sure Reconcile handles good keys that don't exist.
 		Key: "foo/not-found",
 	}, {
 		Name: "label runLatest configuration",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "first-reconcile", "the-config"),
 			simpleConfig("default", "the-config"),
@@ -87,7 +83,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/first-reconcile",
 	}, {
 		Name: "label pinned revision",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			pinnedRoute("default", "pinned-revision", "the-revision"),
 			simpleConfig("default", "the-config"),
@@ -107,20 +102,18 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/pinned-revision",
 	}, {
 		Name: "steady state",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "steady-state", "the-config", WithRouteFinalizer),
 			simpleConfig("default", "the-config",
 				WithConfigAnn("serving.knative.dev/routes", "steady-state")),
 			rev("default", "the-config",
 				WithRevisionAnn("serving.knative.dev/routes", "steady-state"),
-				WithRoutingState(v1.RoutingStateActive),
+				WithRoutingState(v1.RoutingStateActive, clock),
 				WithRoutingStateModified(now.Time)),
 		},
 		Key: "default/steady-state",
 	}, {
 		Name: "no ready revision",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "no-ready-revision", "the-config", WithStatusTraffic()),
 			simpleConfig("default", "the-config", WithLatestReady("")),
@@ -139,7 +132,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/no-ready-revision",
 	}, {
 		Name: "transitioning route",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "transitioning-route", "old", WithRouteFinalizer,
 				WithSpecTraffic(configTraffic("new"))),
@@ -147,7 +139,7 @@ func TestV2Reconcile(t *testing.T) {
 				WithConfigAnn("serving.knative.dev/routes", "transitioning-route")),
 			rev("default", "old",
 				WithRevisionAnn("serving.knative.dev/routes", "transitioning-route"),
-				WithRoutingState(v1.RoutingStateActive)),
+				WithRoutingState(v1.RoutingStateActive, clock)),
 			simpleConfig("default", "new"),
 			rev("default", "new"),
 		},
@@ -160,7 +152,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/transitioning-route",
 	}, {
 		Name: "failure adding annotation (revision)",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Induce a failure during patching
 		WantErr: true,
 		WithReactors: []clientgotesting.ReactionFunc{
@@ -182,7 +173,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/add-label-failure",
 	}, {
 		Name: "failure adding annotation (configuration)",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Induce a failure during patching
 		WantErr: true,
 		WithReactors: []clientgotesting.ReactionFunc{
@@ -193,7 +183,7 @@ func TestV2Reconcile(t *testing.T) {
 			simpleConfig("default", "the-config"),
 			rev("default", "the-config",
 				WithRevisionAnn("serving.knative.dev/routes", "add-label-failure"),
-				WithRoutingState(v1.RoutingStateActive),
+				WithRoutingState(v1.RoutingStateActive, clock),
 				WithRoutingStateModified(now.Time)),
 		},
 		WantPatches: []clientgotesting.PatchActionImpl{
@@ -206,7 +196,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/add-label-failure",
 	}, {
 		Name: "delete route existing ann",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "delete-route", "the-config", WithRouteFinalizer, WithRouteDeletionTimestamp(&now)),
 			simpleConfig("default", "the-config",
@@ -222,14 +211,13 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/delete-route",
 	}, {
 		Name: "change configurations",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "config-change", "new-config", WithRouteFinalizer),
 			simpleConfig("default", "old-config",
 				WithConfigAnn("serving.knative.dev/routes", "config-change")),
 			rev("default", "old-config",
 				WithRevisionAnn("serving.knative.dev/routes", "config-change"),
-				WithRoutingState(v1.RoutingStateActive)),
+				WithRoutingState(v1.RoutingStateActive, clock)),
 			simpleConfig("default", "new-config"),
 			rev("default", "new-config"),
 		},
@@ -243,7 +231,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/config-change",
 	}, {
 		Name: "update configuration",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "config-update", "the-config", WithRouteFinalizer),
 			simpleConfig("default", "the-config",
@@ -251,7 +238,7 @@ func TestV2Reconcile(t *testing.T) {
 				WithConfigAnn("serving.knative.dev/routes", "config-update")),
 			rev("default", "the-config",
 				WithRevisionAnn("serving.knative.dev/routes", "config-update"),
-				WithRoutingState(v1.RoutingStateActive)),
+				WithRoutingState(v1.RoutingStateActive, clock)),
 			rev("default", "the-config",
 				WithRevName("the-config-ecoge")),
 		},
@@ -262,7 +249,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/config-update",
 	}, {
 		Name: "delete route",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		Objects: []runtime.Object{
 			simpleRunLatest("default", "delete-route", "the-config", WithRouteFinalizer, WithRouteDeletionTimestamp(&now)),
 			simpleConfig("default", "the-config",
@@ -278,7 +264,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/delete-route",
 	}, {
 		Name:    "delete route failure",
-		Ctx:     setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		WantErr: true,
 		WithReactors: []clientgotesting.ReactionFunc{
 			InduceFailure("patch", "configurations"),
@@ -298,7 +283,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/delete-route",
 	}, {
 		Name: "failure while removing a cfg annotation should return an error",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Induce a failure during patching
 		WantErr: true,
 		WithReactors: []clientgotesting.ReactionFunc{
@@ -312,7 +296,7 @@ func TestV2Reconcile(t *testing.T) {
 				WithConfigAnn("serving.knative.dev/routes", "delete-label-failure")),
 			rev("default", "new-config",
 				WithRevisionAnn("serving.knative.dev/routes", "delete-label-failure"),
-				WithRoutingState(v1.RoutingStateActive),
+				WithRoutingState(v1.RoutingStateActive, clock),
 				WithRoutingStateModified(now.Time)),
 			rev("default", "old-config"),
 		},
@@ -326,7 +310,6 @@ func TestV2Reconcile(t *testing.T) {
 		Key: "default/delete-label-failure",
 	}, {
 		Name: "failure while removing a rev annotation should return an error",
-		Ctx:  setResponsiveGCFeature(context.Background(), cfgmap.Enabled),
 		// Induce a failure during patching
 		WantErr: true,
 		WithReactors: []clientgotesting.ReactionFunc{
@@ -341,7 +324,7 @@ func TestV2Reconcile(t *testing.T) {
 			rev("default", "new-config",
 				WithRevisionAnn("serving.knative.dev/routes", "delete-label-failure")),
 			rev("default", "old-config",
-				WithRoutingState(v1.RoutingStateActive),
+				WithRoutingState(v1.RoutingStateActive, clock),
 				WithRevisionAnn("serving.knative.dev/routes", "delete-label-failure")),
 		},
 		WantPatches: []clientgotesting.PatchActionImpl{
@@ -355,16 +338,13 @@ func TestV2Reconcile(t *testing.T) {
 	}}
 
 	table.Test(t, MakeFactory(func(ctx context.Context, listers *Listers, cmw configmap.Watcher) controller.Reconciler {
-		clock := clock.NewFakeClock(fakeTime)
 		client := servingclient.Get(ctx)
 		cLister := listers.GetConfigurationLister()
 		cIndexer := listers.IndexerFor(&v1.Configuration{})
 		rLister := listers.GetRevisionLister()
 		rIndexer := listers.IndexerFor(&v1.Revision{})
 		r := &Reconciler{
-			caccV1: labelerv1.NewConfigurationAccessor(client, &NullTracker{}, cLister),
 			caccV2: labelerv2.NewConfigurationAccessor(client, &NullTracker{}, cLister, cIndexer, clock),
-			raccV1: labelerv1.NewRevisionAccessor(client, &NullTracker{}, rLister),
 			raccV2: labelerv2.NewRevisionAccessor(client, &NullTracker{}, rLister, rIndexer, clock),
 		}
 
@@ -533,10 +513,4 @@ func TestNew(t *testing.T) {
 	if c == nil {
 		t.Fatal("Expected NewController to return a non-nil value")
 	}
-}
-
-func setResponsiveGCFeature(ctx context.Context, flag cfgmap.Flag) context.Context {
-	c := config.FromContextOrDefaults(ctx)
-	c.Features.ResponsiveRevisionGC = flag
-	return config.ToContext(ctx, c)
 }

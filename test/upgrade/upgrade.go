@@ -1,5 +1,5 @@
 /*
-Copyright 2018 The Knative Authors
+Copyright 2020 The Knative Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,11 +18,8 @@ package upgrade
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"syscall"
 	"testing"
 
 	// Mysteriously required to support GCP auth (required by k8s libs).
@@ -31,6 +28,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
 	pkgTest "knative.dev/pkg/test"
+	"knative.dev/pkg/test/spoof"
 	"knative.dev/serving/test"
 	"knative.dev/serving/test/e2e"
 	v1test "knative.dev/serving/test/v1"
@@ -49,7 +47,7 @@ const (
 )
 
 // Shamelessly cribbed from conformance/service_test.
-func assertServiceResourcesUpdated(t pkgTest.TLegacy, clients *test.Clients, names test.ResourceNames, url *url.URL, expectedText string) {
+func assertServiceResourcesUpdated(t testing.TB, clients *test.Clients, names test.ResourceNames, url *url.URL, expectedText string) {
 	t.Helper()
 	// TODO(#1178): Remove "Wait" from all checks below this point.
 	if _, err := pkgTest.WaitForEndpointState(
@@ -57,7 +55,7 @@ func assertServiceResourcesUpdated(t pkgTest.TLegacy, clients *test.Clients, nam
 		clients.KubeClient,
 		t.Logf,
 		url,
-		v1test.RetryingRouteInconsistency(pkgTest.MatchesAllOf(pkgTest.IsStatusOK, pkgTest.EventuallyMatchesBody(expectedText))),
+		v1test.RetryingRouteInconsistency(spoof.MatchesAllOf(spoof.IsStatusOK, pkgTest.EventuallyMatchesBody(expectedText))),
 		"WaitForEndpointToServeText",
 		test.ServingFlags.ResolvableDomain); err != nil {
 		t.Fatal(fmt.Sprintf("The endpoint for Route %s at %s didn't serve the expected text %q: %v", names.Route, url, expectedText, err))
@@ -65,6 +63,7 @@ func assertServiceResourcesUpdated(t pkgTest.TLegacy, clients *test.Clients, nam
 }
 
 func createNewService(serviceName string, t *testing.T) {
+	t.Parallel()
 	clients := e2e.Setup(t)
 
 	names := test.ResourceNames{
@@ -78,18 +77,4 @@ func createNewService(serviceName string, t *testing.T) {
 	}
 	url := resources.Service.Status.URL.URL()
 	assertServiceResourcesUpdated(t, clients, names, url, test.PizzaPlanetText1)
-}
-
-// createPipe create a named pipe. It fails the test if any error except
-// already exist happens.
-func createPipe(t *testing.T, name string) {
-	if err := syscall.Mkfifo(name, 0666); err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			t.Fatal("Failed to create pipe:", err)
-		}
-	}
-
-	test.EnsureCleanup(t, func() {
-		os.Remove(name)
-	})
 }

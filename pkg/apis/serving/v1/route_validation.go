@@ -32,7 +32,6 @@ func (r *Route) Validate(ctx context.Context) *apis.FieldError {
 	errs := serving.ValidateObjectMetadata(ctx, r.GetObjectMeta()).Also(
 		r.validateLabels().ViaField("labels")).ViaField("metadata")
 	errs = errs.Also(r.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
-	errs = errs.Also(r.Status.Validate(apis.WithinStatus(ctx)).ViaField("status"))
 
 	if apis.IsInUpdate(ctx) {
 		original := apis.GetBaseline(ctx).(*Route)
@@ -192,21 +191,6 @@ func (tt *TrafficTarget) validateURL(ctx context.Context, errs *apis.FieldError)
 	return errs
 }
 
-// Validate implements apis.Validatable.
-func (rs *RouteStatus) Validate(ctx context.Context) *apis.FieldError {
-	return rs.RouteStatusFields.Validate(ctx)
-}
-
-// Validate implements apis.Validatable.
-func (rsf *RouteStatusFields) Validate(ctx context.Context) *apis.FieldError {
-	// TODO(mattmoor): Validate other status fields.
-
-	if len(rsf.Traffic) != 0 {
-		return validateTrafficList(ctx, rsf.Traffic).ViaField("traffic")
-	}
-	return nil
-}
-
 func validateClusterVisibilityLabel(label string) (errs *apis.FieldError) {
 	if label != serving.VisibilityClusterLocal {
 		errs = apis.ErrInvalidValue(label, network.VisibilityLabelKey)
@@ -218,7 +202,7 @@ func validateClusterVisibilityLabel(label string) (errs *apis.FieldError) {
 func (r *Route) validateLabels() (errs *apis.FieldError) {
 	for key, val := range r.GetLabels() {
 		switch key {
-		case serving.VisibilityLabelKeyObsolete, network.VisibilityLabelKey:
+		case network.VisibilityLabelKey:
 			errs = errs.Also(validateClusterVisibilityLabel(val))
 		case serving.ServiceLabelKey:
 			errs = errs.Also(verifyLabelOwnerRef(val, serving.ServiceLabelKey, "Service", r.GetOwnerReferences()))

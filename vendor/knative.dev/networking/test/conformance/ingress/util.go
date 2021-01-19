@@ -35,7 +35,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -299,81 +298,6 @@ func CreateTimeoutService(ctx context.Context, t *testing.T, clients *test.Clien
 	return name, port, createPodAndService(ctx, t, clients, pod, svc)
 }
 
-// CreateFlakyService creates a Kubernetes service where the backing pod will
-// succeed only every Nth request.
-func CreateFlakyService(ctx context.Context, t *testing.T, clients *test.Clients, period int) (string, int, context.CancelFunc) {
-	t.Helper()
-	name := test.ObjectNameForTest(t)
-
-	// Avoid zero, but pick a low port number.
-	port := 50 + rand.Intn(50)
-	t.Logf("[%s] Using port %d", name, port)
-
-	// Pick a high port number.
-	containerPort := 8000 + rand.Intn(100)
-	t.Logf("[%s] Using containerPort %d", name, containerPort)
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: test.ServingNamespace,
-			Labels: map[string]string{
-				"test-pod": name,
-			},
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name:            "foo",
-				Image:           pkgTest.ImagePath("flaky"),
-				ImagePullPolicy: corev1.PullIfNotPresent,
-				Ports: []corev1.ContainerPort{{
-					Name:          networking.ServicePortNameHTTP1,
-					ContainerPort: int32(containerPort),
-				}},
-				// This is needed by the runtime image we are using.
-				Env: []corev1.EnvVar{{
-					Name:  "PORT",
-					Value: strconv.Itoa(containerPort),
-				}, {
-					Name:  "PERIOD",
-					Value: strconv.Itoa(period),
-				}},
-				ReadinessProbe: &corev1.Probe{
-					Handler: corev1.Handler{
-						HTTPGet: &corev1.HTTPGetAction{
-							Path: "/",
-							Port: intstr.FromInt(containerPort),
-						},
-					},
-				},
-			}},
-		},
-	}
-
-	svc := &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: test.ServingNamespace,
-			Labels: map[string]string{
-				"test-pod": name,
-			},
-		},
-		Spec: corev1.ServiceSpec{
-			Type: "ClusterIP",
-			Ports: []corev1.ServicePort{{
-				Name:       networking.ServicePortNameHTTP1,
-				Port:       int32(port),
-				TargetPort: intstr.FromInt(containerPort),
-			}},
-			Selector: map[string]string{
-				"test-pod": name,
-			},
-		},
-	}
-
-	return name, port, createPodAndService(ctx, t, clients, pod, svc)
-}
-
 // CreateWebsocketService creates a Kubernetes service that will upgrade the connection
 // to use websockets and echo back the received messages with the provided suffix.
 func CreateWebsocketService(ctx context.Context, t *testing.T, clients *test.Clients, suffix string) (string, int, context.CancelFunc) {
@@ -533,7 +457,13 @@ func createService(ctx context.Context, t *testing.T, clients *test.Clients, svc
 		clients.KubeClient.CoreV1().Services(svc.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
 	})
 	if err := reconciler.RetryTestErrors(func(attempts int) error {
+		if attempts > 0 {
+			t.Logf("Attempt %d creating service %s", attempts, svc.Name)
+		}
 		_, err := clients.KubeClient.CoreV1().Services(svc.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+		if err != nil {
+			t.Logf("Attempt %d creating service failed with: %v", attempts, err)
+		}
 		return err
 	}); err != nil {
 		t.Fatalf("Error creating Service %q: %v", svcName, err)
@@ -548,6 +478,8 @@ func createService(ctx context.Context, t *testing.T, clients *test.Clients, svc
 }
 
 func createExternalNameService(ctx context.Context, t *testing.T, clients *test.Clients, target, gatewayDomain string) context.CancelFunc {
+	t.Helper()
+
 	targetName := strings.SplitN(target, ".", 3)
 	externalNameSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -581,7 +513,13 @@ func createPodAndService(ctx context.Context, t *testing.T, clients *test.Client
 		clients.KubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
 	})
 	if err := reconciler.RetryTestErrors(func(attempts int) error {
+		if attempts > 0 {
+			t.Logf("Attempt %d creating pod %s", attempts, pod.Name)
+		}
 		_, err := clients.KubeClient.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+		if err != nil {
+			t.Logf("Attempt %d creating pod failed with: %v", attempts, err)
+		}
 		return err
 	}); err != nil {
 		t.Fatalf("Error creating Pod %q: %v", podName, err)
@@ -591,7 +529,13 @@ func createPodAndService(ctx context.Context, t *testing.T, clients *test.Client
 		clients.KubeClient.CoreV1().Services(svc.Namespace).Delete(ctx, svc.Name, metav1.DeleteOptions{})
 	})
 	if err := reconciler.RetryTestErrors(func(attempts int) error {
+		if attempts > 0 {
+			t.Logf("Attempt %d creating service %s", attempts, svc.Name)
+		}
 		_, err := clients.KubeClient.CoreV1().Services(svc.Namespace).Create(ctx, svc, metav1.CreateOptions{})
+		if err != nil {
+			t.Logf("Attempt %d creating service failed with: %v", attempts, err)
+		}
 		return err
 	}); err != nil {
 		t.Fatalf("Error creating Service %q: %v", svcName, err)
@@ -643,8 +587,8 @@ func OverrideIngressAnnotation(annotations map[string]string) Option {
 	}
 }
 
-// createIngress creates a Knative Ingress resource
-func createIngress(ctx context.Context, t *testing.T, clients *test.Clients, spec v1alpha1.IngressSpec, io ...Option) (*v1alpha1.Ingress, context.CancelFunc) {
+// CreateIngress creates a Knative Ingress resource
+func CreateIngress(ctx context.Context, t *testing.T, clients *test.Clients, spec v1alpha1.IngressSpec, io ...Option) (*v1alpha1.Ingress, context.CancelFunc) {
 	t.Helper()
 
 	name := test.ObjectNameForTest(t)
@@ -674,7 +618,13 @@ func createIngress(ctx context.Context, t *testing.T, clients *test.Clients, spe
 
 	t.Cleanup(func() { clients.NetworkingClient.Ingresses.Delete(ctx, ing.Name, metav1.DeleteOptions{}) })
 	if err := reconciler.RetryTestErrors(func(attempts int) (err error) {
+		if attempts > 0 {
+			t.Logf("Attempt %d creating ingress %s", attempts, ing.Name)
+		}
 		ing, err = clients.NetworkingClient.Ingresses.Create(ctx, ing, metav1.CreateOptions{})
+		if err != nil {
+			t.Logf("Attempt %d creating ingress failed with: %v", attempts, err)
+		}
 		return err
 	}); err != nil {
 		t.Fatalf("Error creating Ingress %q: %v", ingName, err)
@@ -691,7 +641,7 @@ func createIngress(ctx context.Context, t *testing.T, clients *test.Clients, spe
 func createIngressReadyDialContext(ctx context.Context, t *testing.T, clients *test.Clients, spec v1alpha1.IngressSpec) (*v1alpha1.Ingress, func(context.Context, string, string) (net.Conn, error), context.CancelFunc) {
 	t.Helper()
 
-	ing, cancel := createIngress(ctx, t, clients, spec)
+	ing, cancel := CreateIngress(ctx, t, clients, spec)
 	ingName := ktypes.NamespacedName{Name: ing.Name, Namespace: ing.Namespace}
 
 	if err := WaitForIngressState(ctx, clients.NetworkingClient, ing.Name, IsIngressReady, t.Name()); err != nil {
@@ -1027,11 +977,11 @@ func StatusCodeExpectation(statusCodes sets.Int) ResponseExpectation {
 }
 
 func IsDialError(err error) bool {
-	if err, ok := err.(*url.Error); ok {
-		err, ok := err.Err.(*net.OpError)
-		return ok && err.Op == "dial"
+	var errNetOp *net.OpError
+	if !errors.As(err, &errNetOp) {
+		return false
 	}
-	return false
+	return errNetOp.Op == "dial"
 }
 
 // WaitForIngressState polls the status of the Ingress called name from client every
@@ -1039,7 +989,7 @@ func IsDialError(err error) bool {
 // error or PollTimeout. desc will be used to name the metric that is emitted to
 // track how long it took for name to get into the state checked by inState.
 func WaitForIngressState(ctx context.Context, client *test.NetworkingClients, name string, inState func(r *v1alpha1.Ingress) (bool, error), desc string) error {
-	span := logging.GetEmitableSpan(context.Background(), fmt.Sprintf("WaitForIngressState/%s/%s", name, desc))
+	span := logging.GetEmitableSpan(ctx, fmt.Sprintf("WaitForIngressState/%s/%s", name, desc))
 	defer span.End()
 
 	var lastState *v1alpha1.Ingress

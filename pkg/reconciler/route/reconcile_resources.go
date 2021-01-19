@@ -18,63 +18,132 @@ package route
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"golang.org/x/sync/errgroup"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	"knative.dev/networking/pkg/apis/networking"
 	netv1alpha1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
-	"knative.dev/pkg/apis/duck"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	"knative.dev/serving/pkg/reconciler/route/config"
 	"knative.dev/serving/pkg/reconciler/route/resources"
+	"knative.dev/serving/pkg/reconciler/route/resources/names"
 	"knative.dev/serving/pkg/reconciler/route/traffic"
 )
 
-func (c *Reconciler) reconcileIngress(ctx context.Context, r *v1.Route, desired *netv1alpha1.Ingress) (*netv1alpha1.Ingress, error) {
+func (c *Reconciler) reconcileIngress(
+	ctx context.Context, r *v1.Route, tc *traffic.Config,
+	tls []netv1alpha1.IngressTLS,
+	ingressClass string,
+	acmeChallenges ...netv1alpha1.HTTP01Challenge,
+) (*netv1alpha1.Ingress, *traffic.Rollout, error) {
 	recorder := controller.GetEventRecorder(ctx)
-	ingress, err := c.ingressLister.Ingresses(desired.Namespace).Get(desired.Name)
+	var effectiveRO *traffic.Rollout
+
+	ingress, err := c.ingressLister.Ingresses(r.Namespace).Get(names.Ingress(r))
 	if apierrs.IsNotFound(err) {
+		desired, err := resources.MakeIngress(ctx, r, tc, tls, ingressClass, acmeChallenges...)
+		if err != nil {
+			return nil, nil, err
+		}
 		ingress, err = c.netclient.NetworkingV1alpha1().Ingresses(desired.Namespace).Create(ctx, desired, metav1.CreateOptions{})
 		if err != nil {
 			recorder.Eventf(r, corev1.EventTypeWarning, "CreationFailed", "Failed to create Ingress: %v", err)
-			return nil, fmt.Errorf("failed to create Ingress: %w", err)
+			return nil, nil, fmt.Errorf("failed to create Ingress: %w", err)
 		}
 
 		recorder.Eventf(r, corev1.EventTypeNormal, "Created", "Created Ingress %q", ingress.GetName())
-		return ingress, nil
+		return ingress, tc.BuildRollout(), nil
 	} else if err != nil {
-		return nil, err
-	} else if !equality.Semantic.DeepEqual(ingress.Spec, desired.Spec) ||
-		!equality.Semantic.DeepEqual(ingress.Annotations, desired.Annotations) ||
-		!equality.Semantic.DeepEqual(ingress.Labels, desired.Labels) {
-		// It is notable that one reason for differences here may be defaulting.
-		// When that is the case, the Update will end up being a nop because the
-		// webhook will bring them into alignment and no new reconciliation will occur.
-		// Also, compare annotation and label in case ingress.Class or parent route's labels
-		// is updated.
+		return nil, nil, err
+	} else {
+		// Ingress exists. We need to compute the rollout spec diff.
+		// Get the current rollout state as described by the traffic.
+		curRO := tc.BuildRollout()
+		effectiveRO = curRO
+		nextStepTime := int64(0)
+		cfg := config.FromContext(ctx)
 
-		// Don't modify the informers copy
-		origin := ingress.DeepCopy()
-		origin.Spec = desired.Spec
-		origin.Annotations = desired.Annotations
-		origin.Labels = desired.Labels
-		updated, err := c.netclient.NetworkingV1alpha1().Ingresses(origin.Namespace).Update(ctx, origin, metav1.UpdateOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to update Ingress: %w", err)
+		if cfg.Network.RolloutDurationSecs > 0 {
+			logger := logging.FromContext(ctx).Desugar().With(
+				zap.Int("durationSecs", cfg.Network.RolloutDurationSecs))
+			logger.Debug("Rollout is enabled. Stepping from previous state.")
+			// Get the previous rollout state from the annotation.
+			// If it's corrupt, inexistent, or otherwise incorrect,
+			// the prevRO will be just nil rollout.
+			prevRO := deserializeRollout(ctx,
+				ingress.Annotations[networking.RolloutAnnotationKey])
+
+			// And recompute the rollout state.
+			now := c.clock.Now().UnixNano()
+
+			// Now check if the ingress status changed from not ready to ready.
+			rtView := r.Status.GetCondition(v1.RouteConditionIngressReady)
+			if prevRO != nil && ingress.IsReady() && !rtView.IsTrue() {
+				logger.Debug("Observing Ingress not-ready to ready switch condition for rollout")
+				prevRO.ObserveReady(ctx, now, float64(cfg.Network.RolloutDurationSecs))
+			}
+
+			effectiveRO, nextStepTime = curRO.Step(ctx, prevRO, now)
+			if nextStepTime > 0 {
+				nextStepTime -= now
+				c.enqueueAfter(r, time.Duration(nextStepTime))
+				logger.Debug("Re-enqueuing after", zap.Duration("duration", time.Duration(nextStepTime)))
+			}
+
+			// Comparing and diffing isn't cheap so do it only if we're going
+			// to actually log the message.
+			// Those are well known types, cmp won't panic.
+			if logger.Core().Enabled(zapcore.DebugLevel) && !cmp.Equal(prevRO, effectiveRO) {
+				logger.Debug("Rollout diff:(-was,+now)",
+					zap.String("diff", cmp.Diff(prevRO, effectiveRO)))
+			}
 		}
-		return updated, nil
+		desired, err := resources.MakeIngressWithRollout(ctx, r, tc, effectiveRO,
+			tls, ingressClass, acmeChallenges...)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if !equality.Semantic.DeepEqual(ingress.Spec, desired.Spec) ||
+			!equality.Semantic.DeepEqual(ingress.Annotations, desired.Annotations) ||
+			!equality.Semantic.DeepEqual(ingress.Labels, desired.Labels) {
+
+			// It is notable that one reason for differences here may be defaulting.
+			// When that is the case, the Update will end up being a nop because the
+			// webhook will bring them into alignment and no new reconciliation will occur.
+			// Also, compare annotation and label in case ingress.Class or parent route's labels
+			// is updated.
+
+			// Don't modify the informers copy.
+			origin := ingress.DeepCopy()
+			origin.Spec = desired.Spec
+			origin.Annotations = desired.Annotations
+			origin.Labels = desired.Labels
+
+			updated, err := c.netclient.NetworkingV1alpha1().Ingresses(origin.Namespace).Update(
+				ctx, origin, metav1.UpdateOptions{})
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to update Ingress: %w", err)
+			}
+			return updated, effectiveRO, nil
+		}
 	}
 
-	return ingress, err
+	return ingress, effectiveRO, err
 }
 
 func (c *Reconciler) deleteServices(ctx context.Context, namespace string, serviceNames sets.String) error {
@@ -161,11 +230,10 @@ func (c *Reconciler) updatePlaceholderServices(ctx context.Context, route *v1.Ro
 
 			// Make sure that the service has the proper specification.
 			if !equality.Semantic.DeepEqual(service.Spec, desiredService.Spec) {
-				// Don't modify the informers copy
+				// Don't modify the informers copy.
 				existing := service.DeepCopy()
 				existing.Spec = desiredService.Spec
-				_, err = c.kubeclient.CoreV1().Services(ns).Update(ctx, existing, metav1.UpdateOptions{})
-				if err != nil {
+				if _, err := c.kubeclient.CoreV1().Services(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 					return err
 				}
 			}
@@ -178,89 +246,22 @@ func (c *Reconciler) updatePlaceholderServices(ctx context.Context, route *v1.Ro
 	return eg.Wait()
 }
 
-// Update the lastPinned annotation on revisions we target so they don't get GC'd.
-func (c *Reconciler) reconcileTargetRevisions(ctx context.Context, t *traffic.Config, route *v1.Route) error {
-	gcConfig := config.FromContext(ctx).GC
-	logger := logging.FromContext(ctx)
-	lpDebounce := gcConfig.StaleRevisionLastpinnedDebounce
-
-	eg, egCtx := errgroup.WithContext(ctx)
-	for _, target := range t.Targets {
-		for _, rt := range target {
-			tt := rt.TrafficTarget
-			eg.Go(func() error {
-				rev, err := c.revisionLister.Revisions(route.Namespace).Get(tt.RevisionName)
-				if apierrs.IsNotFound(err) {
-					logger.Infof("Unable to update lastPinned for missing revision %q", tt.RevisionName)
-					return nil
-				} else if err != nil {
-					return err
-				}
-
-				newRev := rev.DeepCopy()
-
-				lastPin, err := newRev.GetLastPinned()
-				if err != nil {
-					// Missing is an expected error case for a not yet pinned revision.
-					if err.(v1.LastPinnedParseError).Type != v1.AnnotationParseErrorTypeMissing {
-						return err
-					}
-				} else {
-					// Enforce a delay before performing an update on lastPinned to avoid excess churn.
-					if lastPin.Add(lpDebounce).After(c.clock.Now()) {
-						return nil
-					}
-				}
-
-				newRev.SetLastPinned(c.clock.Now())
-
-				patch, err := duck.CreateMergePatch(rev, newRev)
-				if err != nil {
-					return err
-				}
-
-				if _, err := c.client.ServingV1().Revisions(route.Namespace).Patch(egCtx, rev.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
-					return fmt.Errorf("failed to set revision annotation: %w", err)
-				}
-				return nil
-			})
-		}
-	}
-	return eg.Wait()
-}
-
-func (c *Reconciler) reconcileCertificate(ctx context.Context, r *v1.Route, desiredCert *netv1alpha1.Certificate) error {
-	recorder := controller.GetEventRecorder(ctx)
-
-	cert, err := c.certificateLister.Certificates(desiredCert.Namespace).Get(desiredCert.Name)
-	if apierrs.IsNotFound(err) {
-		cert, err = c.netclient.NetworkingV1alpha1().Certificates(desiredCert.Namespace).Create(ctx, desiredCert, metav1.CreateOptions{})
-		if err != nil {
-			recorder.Eventf(r, corev1.EventTypeWarning, "CreationFailed", "Failed to create Certificate: %v", err)
-			return fmt.Errorf("failed to create Certificate: %w", err)
-		}
-		recorder.Eventf(r, corev1.EventTypeNormal, "Created",
-			"Created Certificate %s/%s", cert.Namespace, cert.Name)
-		return nil
-	} else if err != nil {
-		return err
-	} else if !metav1.IsControlledBy(cert, r) {
-		// Surface an error in the route's status, and return an error.
-		r.Status.MarkCertificateNotOwned(cert.Name)
-		return fmt.Errorf("route: %s does not own certificate: %s", r.Name, cert.Name)
-	} else if !equality.Semantic.DeepEqual(cert.Spec, desiredCert.Spec) {
-		// Don't modify the informers copy
-		existing := cert.DeepCopy()
-		existing.Spec = desiredCert.Spec
-		_, err := c.netclient.NetworkingV1alpha1().Certificates(existing.Namespace).Update(ctx, existing, metav1.UpdateOptions{})
-		if err != nil {
-			recorder.Eventf(r, corev1.EventTypeWarning, "UpdateFailed",
-				"Failed to update Certificate %s/%s: %v", existing.Namespace, existing.Name, err)
-			return err
-		}
-		recorder.Eventf(existing, corev1.EventTypeNormal, "Updated",
-			"Updated Spec for Certificate %s/%s", existing.Namespace, existing.Name)
+func deserializeRollout(ctx context.Context, ro string) *traffic.Rollout {
+	if ro == "" {
 		return nil
 	}
-	return nil
+	r := &traffic.Rollout{}
+	// Failure can happen if users manually tweaked the
+	// annotation or there's etcd corruption. Just log, rollouts
+	// are not mission critical.
+	if err := json.Unmarshal([]byte(ro), r); err != nil {
+		logging.FromContext(ctx).Warnw("Error deserializing Rollout: "+ro,
+			zap.Error(err))
+		return nil
+	}
+	if !r.Validate() {
+		logging.FromContext(ctx).Warnw("Deserializing Rollout is invalid: " + ro)
+		return nil
+	}
+	return r
 }

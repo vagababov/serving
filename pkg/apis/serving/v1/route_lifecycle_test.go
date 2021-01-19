@@ -167,6 +167,12 @@ func TestRouteIsReady(t *testing.T) {
 			if e, a := tc.isReady, r.IsReady(); e != a {
 				t.Errorf("%q expected: %v got: %v", tc.name, e, a)
 			}
+
+			r.Generation = 1
+			r.Status.ObservedGeneration = 2
+			if r.IsReady() {
+				t.Error("Expected IsReady() to be false when Generation != ObservedGeneration")
+			}
 		})
 	}
 }
@@ -470,6 +476,14 @@ func TestIngressNotConfigured(t *testing.T) {
 	r := &RouteStatus{}
 	r.InitializeConditions()
 	r.MarkIngressNotConfigured()
+
+	apistest.CheckConditionOngoing(r, RouteConditionIngressReady, t)
+}
+
+func TestMarkInRollout(t *testing.T) {
+	r := &RouteStatus{}
+	r.InitializeConditions()
+	r.MarkIngressRolloutInProgress()
 
 	apistest.CheckConditionOngoing(r, RouteConditionIngressReady, t)
 }

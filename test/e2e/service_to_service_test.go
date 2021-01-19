@@ -132,7 +132,7 @@ func testProxyToHelloworld(t *testing.T, clients *test.Clients, helloworldURL *u
 		clients.KubeClient,
 		t.Logf,
 		url,
-		v1test.RetryingRouteInconsistency(pkgTest.Retrying(pkgTest.MatchesAllOf(pkgTest.IsStatusOK, pkgTest.EventuallyMatchesBody(helloworldResponse)), http.StatusBadGateway)),
+		v1test.RetryingRouteInconsistency(spoof.Retrying(spoof.MatchesAllOf(spoof.IsStatusOK, pkgTest.EventuallyMatchesBody(helloworldResponse)), http.StatusBadGateway)),
 		"HTTPProxy",
 		test.ServingFlags.ResolvableDomain,
 		test.AddRootCAtoTransport(context.Background(), t.Logf, clients, test.ServingFlags.HTTPS),
@@ -209,6 +209,8 @@ func TestServiceToServiceCall(t *testing.T) {
 			Path:   resources.Route.Status.URL.Path,
 		}
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			cancel := logstream.Start(t)
 			defer cancel()
 			testProxyToHelloworld(t, clients, helloworldURL, true /*inject*/, false /*accessible externally*/)
@@ -241,6 +243,7 @@ func testSvcToSvcCallViaActivator(t *testing.T, clients *test.Clients, injectA b
 	// Wait for the activator endpoints to equalize.
 	if err := waitForActivatorEndpoints(&TestContext{
 		t:         t,
+		logf:      t.Logf,
 		resources: resources,
 		clients:   clients,
 	}); err != nil {
@@ -260,6 +263,8 @@ func TestSvcToSvcViaActivator(t *testing.T) {
 
 	for _, tc := range testInjection {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			cancel := logstream.Start(t)
 			defer cancel()
 			testSvcToSvcCallViaActivator(t, clients, tc.injectA, tc.injectB)
@@ -306,6 +311,8 @@ func TestCallToPublicService(t *testing.T) {
 
 	for _, tc := range gatewayTestCases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			cancel := logstream.Start(t)
 			defer cancel()
 			testProxyToHelloworld(t, clients, tc.url, false /*inject*/, tc.accessibleExternally)

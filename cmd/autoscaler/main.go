@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -37,7 +38,7 @@ import (
 	"knative.dev/pkg/injection/sharedmain"
 	"knative.dev/pkg/leaderelection"
 
-	"knative.dev/pkg/configmap"
+	configmap "knative.dev/pkg/configmap/informer"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/metrics"
@@ -146,15 +147,30 @@ func main() {
 		logger.Fatalw("Failed to start informers", zap.Error(err))
 	}
 
-	cc, selfIP := componentConfigAndIP(ctx, logger)
-	ctx = leaderelection.WithStandardLeaderElectorBuilder(ctx, kubeClient, cc)
+	cc := componentConfigAndIP(ctx)
 
 	// accept is the func to call when this pod owns the Revision for this StatMessage.
 	accept := func(sm asmetrics.StatMessage) {
-		collector.Record(sm.Key, time.Now(), sm.Stat)
+		collector.Record(sm.Key, time.Unix(sm.Stat.Timestamp, 0), sm.Stat)
 		multiScaler.Poke(sm.Key, sm.Stat)
 	}
-	f := statforwarder.New(ctx, logger, kubeClient, selfIP, bucket.AutoscalerBucketSet(cc.Buckets), accept)
+
+	var f *statforwarder.Forwarder
+	if b, bs, err := leaderelection.NewStatefulSetBucketAndSet(int(cc.Buckets)); err == nil {
+		logger.Info("Running with StatefulSet leader election")
+		ctx = leaderelection.WithStatefulSetElectorBuilder(ctx, cc, b)
+		f = statforwarder.New(ctx, bs)
+		if err := statforwarder.StatefulSetBasedProcessor(ctx, f, accept); err != nil {
+			logger.Fatalw("Failed to set up statefulset processors", zap.Error(err))
+		}
+	} else {
+		logger.Info("Running with Standard leader election")
+		ctx = leaderelection.WithStandardLeaderElectorBuilder(ctx, kubeClient, cc)
+		f = statforwarder.New(ctx, bucket.AutoscalerBucketSet(cc.Buckets))
+		if err := statforwarder.LeaseBasedProcessor(ctx, f, accept); err != nil {
+			logger.Fatalw("Failed to set up lease tracking", zap.Error(err))
+		}
+	}
 
 	// Set up a statserver.
 	statsServer := statserver.New(statsServerAddr, statsCh, logger, f.IsBucketOwner)
@@ -165,6 +181,10 @@ func main() {
 
 	go func() {
 		for sm := range statsCh {
+			// Set the timestamp when first receiving the stat.
+			if sm.Stat.Timestamp == 0 {
+				sm.Stat.Timestamp = time.Now().Unix()
+			}
 			f.Process(sm)
 		}
 	}()
@@ -182,7 +202,7 @@ func main() {
 	statsServer.Shutdown(5 * time.Second)
 	profilingServer.Shutdown(context.Background())
 	// Don't forward ErrServerClosed as that indicates we're already shutting down.
-	if err := eg.Wait(); err != nil && err != http.ErrServerClosed {
+	if err := eg.Wait(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Errorw("Error while running server", zap.Error(err))
 	}
 }
@@ -230,21 +250,16 @@ func flush(logger *zap.SugaredLogger) {
 	metrics.FlushExporter()
 }
 
-func componentConfigAndIP(ctx context.Context, logger *zap.SugaredLogger) (leaderelection.ComponentConfig, string) {
+func componentConfigAndIP(ctx context.Context) leaderelection.ComponentConfig {
 	id, err := bucket.Identity()
 	if err != nil {
-		logger.Fatalw("Failed to generate Lease holder identify", zap.Error(err))
-	}
-
-	_, ip, err := bucket.ExtractPodNameAndIP(id)
-	if err != nil {
-		logger.Fatalw("Failed to extract IP from identify", zap.Error(err))
+		logging.FromContext(ctx).Fatalw("Failed to generate Lease holder identify", zap.Error(err))
 	}
 
 	// Set up leader election config
 	leaderElectionConfig, err := sharedmain.GetLeaderElectionConfig(ctx)
 	if err != nil {
-		logger.Fatal("Error loading leader election configuration: ", err)
+		logging.FromContext(ctx).Fatalw("Error loading leader election configuration", zap.Error(err))
 	}
 
 	cc := leaderElectionConfig.GetComponentConfig(component)
@@ -253,5 +268,5 @@ func componentConfigAndIP(ctx context.Context, logger *zap.SugaredLogger) (leade
 	}
 	cc.Identity = id
 
-	return cc, ip
+	return cc
 }

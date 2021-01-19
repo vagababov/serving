@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"strings"
 	"time"
 
 	vegeta "github.com/tsenart/vegeta/v12/lib"
@@ -95,7 +96,7 @@ func main() {
 	q.Input.ThresholdInputs = append(q.Input.ThresholdInputs, t.analyzers...)
 
 	// Send 1k QPS for the given duration with a 30s request timeout.
-	rate := vegeta.Rate{Freq: 1000, Per: time.Second}
+	rate := vegeta.Rate{Freq: 3600, Per: time.Second}
 	targeter := vegeta.NewStaticTargeter(t.target)
 	attacker := vegeta.NewAttacker(vegeta.Timeout(30 * time.Second))
 
@@ -106,11 +107,21 @@ func main() {
 		serving.ServiceLabelKey: *target,
 	})
 	log.Print("Selector: ", selector)
+
+	// Setup background metric processes
 	deploymentStatus := metrics.FetchDeploymentsStatus(ctx, namespace, selector, time.Second)
+	routeStatus := metrics.FetchRouteStatus(ctx, namespace, *target, time.Second)
+
 	// Start the attack!
 	results := attacker.Attack(targeter, rate, *duration, "rollout-test")
+	firstRev, secondRev := "", ""
+
 	// After a minute, update the Ksvc.
-	updateSvc := time.After(time.Minute)
+	updateSvc := time.After(30 * time.Second)
+
+	// Since we might qfatal in the end, this would not execute the deferred calls
+	// thus failing the restore. So bind and execute explicitly.
+	var restoreFn func()
 LOOP:
 	for {
 		select {
@@ -120,17 +131,37 @@ LOOP:
 			break LOOP
 
 		case <-updateSvc:
-			log.Println("Updating the service: ", *target)
+			log.Println("Updating the service:", *target)
 			sc := servingclient.Get(ctx)
 			svc, err := sc.ServingV1().Services(namespace).Get(context.Background(), *target, metav1.GetOptions{})
 			if err != nil {
 				log.Fatalf("Error getting ksvc %s: %v", *target, err)
 			}
+			svc = svc.DeepCopy()
 			// Make sure we start with a single instance.
+
+			// At the end of the benchmark, restore to the previous value.
+			if prev := svc.Spec.Template.Annotations["autoscaling.knative.dev/minScale"]; prev != "" {
+				restoreFn = func() {
+					restore, err := sc.ServingV1().Services(namespace).Get(context.Background(), *target, metav1.GetOptions{})
+					if err != nil {
+						log.Println("Error getting service", err)
+						return
+					}
+					restore = restore.DeepCopy()
+					restore.Spec.Template.Annotations["autoscaling.knative.dev/minScale"] = prev
+					_, err = sc.ServingV1().Services(namespace).Update(
+						context.Background(), restore, metav1.UpdateOptions{})
+					log.Printf("Restoring the service to initial minScale = %s, err: %#v", prev, err)
+					// Also remove the oldest revision, to keep the list of revisions short.
+					sc.ServingV1().Revisions(namespace).Delete(ctx, restore.Status.LatestReadyRevisionName,
+						metav1.DeleteOptions{})
+				}
+			}
 			svc.Spec.Template.Annotations["autoscaling.knative.dev/minScale"] = "1"
 			_, err = sc.ServingV1().Services(namespace).Update(context.Background(), svc, metav1.UpdateOptions{})
 			if err != nil {
-				log.Fatalf("Error updating ksvc %s: %v", *target, err)
+				fatalf("Error updating ksvc %s: %v", *target, err)
 			}
 			log.Println("Successfully updated the service.")
 		case res, ok := <-results:
@@ -142,12 +173,57 @@ LOOP:
 			// Handle the result for this request.
 			metrics.HandleResult(q, *res, t.stat, ar)
 		case ds := <-deploymentStatus:
-			// Add a sample point for the deployment status.
-			q.AddSamplePoint(mako.XTime(ds.Time), map[string]float64{
-				"dp": float64(ds.DesiredReplicas),
-				"ap": float64(ds.ReadyReplicas),
-			})
+			// Ignore deployment updates until we get current one.
+			if firstRev == "" {
+				break LOOP
+			}
+			// Deployment name contains revision name.
+			// If it is the first one -- report it.
+			if strings.Contains(ds.DeploymentName, firstRev) {
+				// Add a sample point for the deployment status.
+				q.AddSamplePoint(mako.XTime(ds.Time), map[string]float64{
+					"dp": float64(ds.DesiredReplicas),
+					"ap": float64(ds.ReadyReplicas),
+				})
+			} else if secondRev != "" && strings.Contains(ds.DeploymentName, secondRev) {
+				// Otherwise eport the pods for the new deployment.
+				q.AddSamplePoint(mako.XTime(ds.Time), map[string]float64{
+					"dp2": float64(ds.DesiredReplicas),
+					"ap2": float64(ds.ReadyReplicas),
+				})
+				// Ignore all other revisions' deployments if there are, since
+				// they are from previous test run iterations and we don't care about
+				// their reported scale values (should be 0 & 100 depending on which
+				// one it is).
+			}
+		case rs := <-routeStatus:
+			if firstRev == "" {
+				firstRev = rs.Traffic[0].RevisionName
+				log.Println("Inferred first revision =", firstRev)
+			}
+			v := make(map[string]float64, 2)
+			if len(rs.Traffic) == 1 {
+				// If the name matches the first revision then it's before
+				// we started the rollout. If not, then the rollout is
+				// 100% complete.
+				if rs.Traffic[0].RevisionName == firstRev {
+					v["t1"] = float64(*rs.Traffic[0].Percent)
+				} else {
+					v["t2"] = float64(*rs.Traffic[0].Percent)
+				}
+			} else {
+				v["t1"] = float64(*rs.Traffic[0].Percent)
+				v["t2"] = float64(*rs.Traffic[1].Percent)
+				if secondRev == "" {
+					secondRev = rs.Traffic[1].RevisionName
+					log.Println("Inferred second revision =", secondRev)
+				}
+			}
+			q.AddSamplePoint(mako.XTime(rs.Time), v)
 		}
+	}
+	if restoreFn != nil {
+		restoreFn()
 	}
 
 	// Walk over our accumulated per-second error rates and report them as

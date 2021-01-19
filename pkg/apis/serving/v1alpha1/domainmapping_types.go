@@ -48,6 +48,10 @@ type DomainMapping struct {
 
 // Verify that DomainMapping adheres to the appropriate interfaces.
 var (
+	// Check that DomainMapping may be validated and defaulted.
+	_ apis.Validatable = (*DomainMapping)(nil)
+	_ apis.Defaultable = (*DomainMapping)(nil)
+
 	// Check that the type conforms to the duck Knative Resource shape.
 	_ duckv1.KRShaped = (*DomainMapping)(nil)
 )
@@ -91,9 +95,21 @@ const (
 	// and the Ingress is ready.
 	DomainMappingConditionReady = apis.ConditionReady
 
+	// DomainMappingConditionReferenceResolved reflects whether the Ref
+	// has been successfully resolved to an existing object.
+	DomainMappingConditionReferenceResolved apis.ConditionType = "ReferenceResolved"
+
 	// DomainMappingConditionIngressReady reflects the readiness of the
 	// underlying Ingress resource.
 	DomainMappingConditionIngressReady apis.ConditionType = "IngressReady"
+
+	// DomainMappingConditionDomainClaimed reflects that the ClusterDomainClaim
+	// for this DomainMapping exists, and is owned by this DomainMapping.
+	DomainMappingConditionDomainClaimed apis.ConditionType = "DomainClaimed"
+
+	// DomainMappingConditionCertificateProvisioned is set to False when the
+	// Knative Certificates fail to be provisioned for the DomainMapping.
+	DomainMappingConditionCertificateProvisioned apis.ConditionType = "CertificateProvisioned"
 )
 
 // GetStatus retrieves the status of the DomainMapping. Implements the KRShaped interface.

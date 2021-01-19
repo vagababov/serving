@@ -21,7 +21,7 @@ package test
 import (
 	"context"
 
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -35,6 +35,7 @@ import (
 	"knative.dev/pkg/test"
 	"knative.dev/serving/pkg/client/clientset/versioned"
 	servingv1 "knative.dev/serving/pkg/client/clientset/versioned/typed/serving/v1"
+	servingv1alpha1 "knative.dev/serving/pkg/client/clientset/versioned/typed/serving/v1alpha1"
 
 	// Every E2E test requires this, so add it here.
 	_ "knative.dev/pkg/metrics/testing"
@@ -42,13 +43,19 @@ import (
 
 // Clients holds instances of interfaces for making requests to Knative Serving.
 type Clients struct {
-	KubeClient       *test.KubeClient
-	ServingClient    *ServingClients
-	NetworkingClient *NetworkingClients
-	Dynamic          dynamic.Interface
+	KubeClient         *test.KubeClient
+	ServingAlphaClient *ServingAlphaClients
+	ServingClient      *ServingClients
+	NetworkingClient   *NetworkingClients
+	Dynamic            dynamic.Interface
 }
 
-// ServingClients holds instances of interfaces for making requests to knative serving clients
+// ServingAlphaClients holds instances of interfaces for making requests to knative serving clients.
+type ServingAlphaClients struct {
+	DomainMappings servingv1alpha1.DomainMappingInterface
+}
+
+// ServingClients holds instances of interfaces for making requests to knative serving clients.
 type ServingClients struct {
 	Routes    servingv1.RouteInterface
 	Configs   servingv1.ConfigurationInterface
@@ -95,6 +102,11 @@ func NewClientsFromConfig(cfg *rest.Config, namespace string) (*Clients, error) 
 		return nil, err
 	}
 
+	clients.ServingAlphaClient, err = newServingAlphaClients(cfg, namespace)
+	if err != nil {
+		return nil, err
+	}
+
 	clients.Dynamic, err = dynamic.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -109,7 +121,7 @@ func NewClientsFromConfig(cfg *rest.Config, namespace string) (*Clients, error) 
 }
 
 // newNetworkingClients instantiates and returns the networking clientset required to make requests
-// to Networking resources on the Knative service cluster
+// to Networking resources on the Knative service cluster.
 func newNetworkingClients(cfg *rest.Config, namespace string) (*NetworkingClients, error) {
 	cs, err := netclientset.NewForConfig(cfg)
 	if err != nil {
@@ -119,6 +131,19 @@ func newNetworkingClients(cfg *rest.Config, namespace string) (*NetworkingClient
 		ServerlessServices: cs.NetworkingV1alpha1().ServerlessServices(namespace),
 		Ingresses:          cs.NetworkingV1alpha1().Ingresses(namespace),
 		Certificates:       cs.NetworkingV1alpha1().Certificates(namespace),
+	}, nil
+}
+
+// newServingAlphaClients instantiates and returns the serving clientset required to make requests to the
+// knative serving cluster.
+func newServingAlphaClients(cfg *rest.Config, namespace string) (*ServingAlphaClients, error) {
+	cs, err := versioned.NewForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ServingAlphaClients{
+		DomainMappings: cs.ServingV1alpha1().DomainMappings(namespace),
 	}, nil
 }
 
@@ -143,7 +168,7 @@ func newServingClients(cfg *rest.Config, namespace string) (*ServingClients, err
 func (clients *ServingClients) Delete(routes, configs, services []string) []error {
 	deletions := []struct {
 		client interface {
-			Delete(ctx context.Context, name string, options v1.DeleteOptions) error
+			Delete(ctx context.Context, name string, options metav1.DeleteOptions) error
 		}
 		items []string
 	}{
@@ -154,8 +179,8 @@ func (clients *ServingClients) Delete(routes, configs, services []string) []erro
 		{clients.Configs, configs},
 	}
 
-	propPolicy := v1.DeletePropagationForeground
-	dopt := v1.DeleteOptions{
+	propPolicy := metav1.DeletePropagationForeground
+	dopt := metav1.DeleteOptions{
 		PropagationPolicy: &propPolicy,
 	}
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"net/http"
 	"sort"
 	"sync"
 
@@ -38,9 +39,7 @@ import (
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/logging/logkey"
-	"knative.dev/pkg/network"
 	"knative.dev/pkg/reconciler"
-	"knative.dev/serving/pkg/activator/util"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 	revisioninformer "knative.dev/serving/pkg/client/injection/informers/serving/v1/revision"
@@ -102,11 +101,11 @@ func (p *podTracker) Capacity() int {
 	return p.b.Capacity()
 }
 
-func (p *podTracker) UpdateConcurrency(c int) error {
+func (p *podTracker) UpdateConcurrency(c int) {
 	if p.b == nil {
-		return nil
+		return
 	}
-	return p.b.UpdateConcurrency(c)
+	p.b.UpdateConcurrency(c)
 }
 
 func (p *podTracker) Reserve(ctx context.Context) (func(), bool) {
@@ -119,7 +118,7 @@ func (p *podTracker) Reserve(ctx context.Context) (func(), bool) {
 type breaker interface {
 	Capacity() int
 	Maybe(ctx context.Context, thunk func()) error
-	UpdateConcurrency(int) error
+	UpdateConcurrency(int)
 	Reserve(ctx context.Context) (func(), bool)
 }
 
@@ -153,7 +152,7 @@ type revisionThrottler struct {
 	podTrackers []*podTracker
 
 	// Effective trackers that are assigned to this Activator.
-	// This is a subset of podIPTrackers.
+	// This is a subset of podTrackers.
 	assignedTrackers []*podTracker
 
 	// If we don't have a healthy clusterIPTracker this is set to nil, otherwise
@@ -171,7 +170,7 @@ func newRevisionThrottler(revID types.NamespacedName,
 	containerConcurrency int, proto string,
 	breakerParams queue.BreakerParams,
 	logger *zap.SugaredLogger) *revisionThrottler {
-	logger = logger.With(zap.Object(logkey.Key, logging.NamespacedName(revID)))
+	logger = logger.With(zap.String(logkey.Key, revID.String()))
 	var (
 		revBreaker breaker
 		lbp        lbPolicy
@@ -412,7 +411,7 @@ func (rt *revisionThrottler) handleUpdate(update revisionDestsUpdate) {
 		zap.String("ClusterIP", update.ClusterIPDest), zap.Object("dests", logging.StringSet(update.Dests)))
 
 	// ClusterIP is not yet ready, so we want to send requests directly to the pods.
-	// NB: this will not be called in parallel, thus we can build a new podIPTrackers
+	// NB: this will not be called in parallel, thus we can build a new podTrackers
 	// array before taking out a lock.
 	if update.ClusterIPDest == "" {
 		// Create a map for fast lookup of existing trackers.
@@ -496,8 +495,8 @@ func NewThrottler(ctx context.Context, ipAddr string) *Throttler {
 }
 
 // Run starts the throttler and blocks until the context is done.
-func (t *Throttler) Run(ctx context.Context) {
-	rbm := newRevisionBackendsManager(ctx, network.AutoTransport)
+func (t *Throttler) Run(ctx context.Context, probeTransport http.RoundTripper) {
+	rbm := newRevisionBackendsManager(ctx, probeTransport)
 	// Update channel is closed when ctx is done.
 	t.run(rbm.updates())
 }
@@ -518,8 +517,8 @@ func (t *Throttler) run(updateCh <-chan revisionDestsUpdate) {
 }
 
 // Try waits for capacity and then executes function, passing in a l4 dest to send a request
-func (t *Throttler) Try(ctx context.Context, function func(string) error) error {
-	rt, err := t.getOrCreateRevisionThrottler(util.RevIDFrom(ctx))
+func (t *Throttler) Try(ctx context.Context, revID types.NamespacedName, function func(string) error) error {
+	rt, err := t.getOrCreateRevisionThrottler(revID)
 	if err != nil {
 		return err
 	}
@@ -563,11 +562,11 @@ func (t *Throttler) revisionUpdated(obj interface{}) {
 	rev := obj.(*v1.Revision)
 	revID := types.NamespacedName{Namespace: rev.Namespace, Name: rev.Name}
 
-	t.logger.Debug("Revision update", zap.Object(logkey.Key, logging.NamespacedName(revID)))
+	t.logger.Debug("Revision update", zap.String(logkey.Key, revID.String()))
 
 	if _, err := t.getOrCreateRevisionThrottler(revID); err != nil {
 		t.logger.Errorw("Failed to get revision throttler for revision",
-			zap.Error(err), zap.Object(logkey.Key, logging.NamespacedName(revID)))
+			zap.Error(err), zap.String(logkey.Key, revID.String()))
 	}
 }
 
@@ -577,7 +576,7 @@ func (t *Throttler) revisionDeleted(obj interface{}) {
 	rev := obj.(*v1.Revision)
 	revID := types.NamespacedName{Namespace: rev.Namespace, Name: rev.Name}
 
-	t.logger.Debugw("Revision delete", zap.Object(logkey.Key, logging.NamespacedName(revID)))
+	t.logger.Debugw("Revision delete", zap.String(logkey.Key, revID.String()))
 
 	t.revisionThrottlersMutex.Lock()
 	defer t.revisionThrottlersMutex.Unlock()
@@ -587,11 +586,9 @@ func (t *Throttler) revisionDeleted(obj interface{}) {
 func (t *Throttler) handleUpdate(update revisionDestsUpdate) {
 	if rt, err := t.getOrCreateRevisionThrottler(update.Rev); err != nil {
 		if k8serrors.IsNotFound(err) {
-			t.logger.Debugw("Revision not found. It was probably removed",
-				zap.Object(logkey.Key, logging.NamespacedName(update.Rev)))
+			t.logger.Debugw("Revision not found. It was probably removed", zap.String(logkey.Key, update.Rev.String()))
 		} else {
-			t.logger.Errorw("Failed to get revision throttler", zap.Error(err),
-				zap.Object(logkey.Key, logging.NamespacedName(update.Rev)))
+			t.logger.Errorw("Failed to get revision throttler", zap.Error(err), zap.String(logkey.Key, update.Rev.String()))
 		}
 	} else {
 		rt.handleUpdate(update)
@@ -609,11 +606,10 @@ func (t *Throttler) handlePubEpsUpdate(eps *corev1.Endpoints) {
 	}
 	rev := types.NamespacedName{Name: revN, Namespace: eps.Namespace}
 	if rt, err := t.getOrCreateRevisionThrottler(rev); err != nil {
-		logger := t.logger.With(zap.Object(logkey.Key, logging.NamespacedName(rev)))
 		if k8serrors.IsNotFound(err) {
-			logger.Debug("Revision not found. It was probably removed")
+			t.logger.Debugw("Revision not found. It was probably removed", zap.String(logkey.Key, rev.String()))
 		} else {
-			logger.Errorw("Failed to get revision throttler", zap.Error(err))
+			t.logger.Errorw("Failed to get revision throttler", zap.Error(err), zap.String(logkey.Key, rev.String()))
 		}
 	} else {
 		rt.handlePubEpsUpdate(eps, t.ipAddress)
@@ -729,7 +725,7 @@ func zeroOrOne(x int) int32 {
 }
 
 // UpdateConcurrency sets the concurrency of the breaker
-func (ib *infiniteBreaker) UpdateConcurrency(cc int) error {
+func (ib *infiniteBreaker) UpdateConcurrency(cc int) {
 	rcc := zeroOrOne(cc)
 	// We lock here to make sure two scale up events don't
 	// stomp on each other's feet.
@@ -746,7 +742,6 @@ func (ib *infiniteBreaker) UpdateConcurrency(cc int) error {
 			close(ib.broadcast)
 		}
 	}
-	return nil
 }
 
 // Maybe executes thunk when capacity is available

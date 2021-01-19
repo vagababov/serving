@@ -23,10 +23,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/clock"
 	"knative.dev/pkg/kmeta"
-	cfgmap "knative.dev/serving/pkg/apis/config"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
-	"knative.dev/serving/pkg/reconciler/configuration/config"
 )
 
 // MakeRevision creates a revision object from configuration.
@@ -44,9 +42,7 @@ func MakeRevision(ctx context.Context, configuration *v1.Configuration, clock cl
 	}
 
 	// Pending tells the labeler that we have not processed this revision.
-	if config.FromContextOrDefaults(ctx).Features.ResponsiveRevisionGC != cfgmap.Disabled {
-		rev.SetRoutingState(v1.RoutingStatePending, clock)
-	}
+	rev.SetRoutingState(v1.RoutingStatePending, clock)
 
 	updateRevisionLabels(rev, configuration)
 	updateRevisionAnnotations(rev, configuration)
@@ -68,6 +64,8 @@ func updateRevisionLabels(rev, config metav1.Object) {
 		serving.ConfigurationLabelKey,
 		serving.ServiceLabelKey,
 		serving.ConfigurationGenerationLabelKey,
+		serving.ConfigurationUIDLabelKey,
+		serving.ServiceUIDLabelKey,
 	} {
 		labels[key] = RevisionLabelValueForKey(key, config)
 	}
@@ -105,6 +103,10 @@ func RevisionLabelValueForKey(key string, config metav1.Object) string {
 		return config.GetLabels()[serving.ServiceLabelKey]
 	case serving.ConfigurationGenerationLabelKey:
 		return fmt.Sprint(config.GetGeneration())
+	case serving.ConfigurationUIDLabelKey:
+		return string(config.GetUID())
+	case serving.ServiceUIDLabelKey:
+		return config.GetLabels()[serving.ServiceUIDLabelKey]
 	}
 	return ""
 }

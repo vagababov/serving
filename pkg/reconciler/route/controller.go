@@ -38,11 +38,8 @@ import (
 	"knative.dev/pkg/system"
 	"knative.dev/pkg/tracker"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
-	servingreconciler "knative.dev/serving/pkg/reconciler"
 	"knative.dev/serving/pkg/reconciler/route/config"
 )
-
-const controllerAgentName = "route-controller"
 
 // NewController initializes the controller and is called by the generated code
 // Registers eventhandlers to enqueue events
@@ -61,7 +58,6 @@ func newControllerWithClock(
 	clock system.Clock,
 	opts ...reconcilerOption,
 ) *controller.Impl {
-	ctx = servingreconciler.AnnotateLoggerWithName(ctx, controllerAgentName)
 	logger := logging.FromContext(ctx)
 	serviceInformer := serviceinformer.Get(ctx)
 	routeInformer := routeinformer.Get(ctx)
@@ -93,6 +89,7 @@ func newControllerWithClock(
 		configStore.WatchConfigs(cmw)
 		return controller.Options{ConfigStore: configStore}
 	})
+	c.enqueueAfter = impl.EnqueueAfter
 
 	logger.Info("Setting up event handlers")
 	routeInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))

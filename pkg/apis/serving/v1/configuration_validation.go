@@ -41,8 +41,6 @@ func (c *Configuration) Validate(ctx context.Context) (errs *apis.FieldError) {
 		errs = errs.Also(c.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
 	}
 
-	errs = errs.Also(c.Status.Validate(apis.WithinStatus(ctx)).ViaField("status"))
-
 	if apis.IsInUpdate(ctx) {
 		original := apis.GetBaseline(ctx).(*Configuration)
 		// Don't validate annotations(creator and lastModifier) when configuration owned by service
@@ -63,22 +61,14 @@ func (cs *ConfigurationSpec) Validate(ctx context.Context) *apis.FieldError {
 	return cs.Template.Validate(ctx).ViaField("template")
 }
 
-// Validate implements apis.Validatable
-func (cs *ConfigurationStatus) Validate(ctx context.Context) *apis.FieldError {
-	return cs.ConfigurationStatusFields.Validate(ctx)
-}
-
-// Validate implements apis.Validatable
-func (csf *ConfigurationStatusFields) Validate(ctx context.Context) *apis.FieldError {
-	return nil
-}
-
 // validateLabels function validates configuration labels
 func (c *Configuration) validateLabels() (errs *apis.FieldError) {
 	for key, val := range c.GetLabels() {
 		switch key {
-		case serving.RouteLabelKey, serving.VisibilityLabelKeyObsolete:
-			// Known valid labels.
+		case serving.RouteLabelKey,
+			serving.ConfigurationUIDLabelKey,
+			serving.ServiceUIDLabelKey:
+			// Known valid labels - so just skip them
 		case serving.ServiceLabelKey:
 			errs = errs.Also(verifyLabelOwnerRef(val, serving.ServiceLabelKey, "Service", c.GetOwnerReferences()))
 		default:

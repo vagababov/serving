@@ -193,6 +193,12 @@ func TestRevisionIsReady(t *testing.T) {
 			if got, want := r.IsReady(), tc.isReady; got != want {
 				t.Errorf("isReady =  %v want: %v", got, want)
 			}
+
+			r.Generation = 1
+			r.Status.ObservedGeneration = 2
+			if r.IsReady() {
+				t.Error("Expected IsReady() to be false when Generation != ObservedGeneration")
+			}
 		})
 	}
 }
@@ -311,7 +317,7 @@ func TestTypicalFlowWithContainerMissing(t *testing.T) {
 	apistest.CheckConditionOngoing(r, RevisionConditionContainerHealthy, t)
 	apistest.CheckConditionOngoing(r, RevisionConditionReady, t)
 
-	const want = "something about the container being not found"
+	const want = "something about the container being not found %s"
 	r.MarkContainerHealthyFalse(ReasonContainerMissing, want)
 	apistest.CheckConditionOngoing(r, RevisionConditionResourcesAvailable, t)
 	apistest.CheckConditionFailed(r, RevisionConditionContainerHealthy, t)

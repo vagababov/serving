@@ -29,8 +29,8 @@ import (
 	network "knative.dev/networking/pkg"
 	"knative.dev/networking/pkg/apis/networking"
 	nv1a1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
+	"knative.dev/networking/pkg/prober"
 	pkgnet "knative.dev/pkg/network"
-	"knative.dev/pkg/network/prober"
 	"knative.dev/serving/pkg/activator"
 	pav1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/autoscaler/config/autoscalerconfig"
@@ -320,7 +320,8 @@ func (ks *scaler) scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 
 	min, max := pa.ScaleBounds(asConfig)
 	initialScale := kparesources.GetInitialScale(asConfig, pa)
-	logger.Debugf("MinScale = %d, MaxScale = %d, InitialScale = %d, DesiredScale = %d Reachable = %v",
+	// Log reachability as quoted string, since default value is "".
+	logger.Debugf("MinScale = %d, MaxScale = %d, InitialScale = %d, DesiredScale = %d Reachable = %q",
 		min, max, initialScale, desiredScale, pa.Spec.Reachability)
 	// If initial scale has been attained, ignore the initialScale altogether.
 	if initialScale > 1 && !pa.Status.IsScaleTargetInitialized() {

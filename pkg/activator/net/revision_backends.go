@@ -40,12 +40,12 @@ import (
 
 	network "knative.dev/networking/pkg"
 	pkgnet "knative.dev/networking/pkg/apis/networking"
+	"knative.dev/networking/pkg/prober"
 	endpointsinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/endpoints"
 	serviceinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/service"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
 	"knative.dev/pkg/logging/logkey"
-	"knative.dev/pkg/network/prober"
 	"knative.dev/pkg/reconciler"
 	"knative.dev/serving/pkg/apis/serving"
 	revisioninformer "knative.dev/serving/pkg/client/injection/informers/serving/v1/revision"
@@ -129,7 +129,7 @@ func newRevisionWatcher(ctx context.Context, rev types.NamespacedName, protocol 
 		destsCh:         destsCh,
 		serviceLister:   serviceLister,
 		podsAddressable: true, // By default we presume we can talk to pods directly.
-		logger:          logger.With(zap.Object(logkey.Key, logging.NamespacedName(rev))),
+		logger:          logger.With(zap.String(logkey.Key, rev.String())),
 	}
 }
 
@@ -359,6 +359,7 @@ func (rw *revisionWatcher) run(probeFrequency time.Duration) {
 		case <-rw.stopCh:
 			return
 		case x := <-rw.destsCh:
+			rw.logger.Debugf("Updating Endpoints: ready backends: %d, not-ready backends: %d", len(x.ready), len(x.notReady))
 			prevDests, curDests = curDests, x
 		case <-tickCh:
 		}
@@ -480,17 +481,13 @@ func (rbm *revisionBackendsManager) endpointsUpdated(newObj interface{}) {
 	}
 	endpoints := newObj.(*corev1.Endpoints)
 	revID := types.NamespacedName{Namespace: endpoints.Namespace, Name: endpoints.Labels[serving.RevisionLabelKey]}
-	logger := rbm.logger.With(zap.Object(logkey.Key, logging.NamespacedName(revID)))
-
-	logger.Debugf("Endpoints updated: %#v", newObj)
 
 	rw, err := rbm.getOrCreateRevisionWatcher(revID)
 	if err != nil {
-		logger.Errorw("Failed to get revision watcher", zap.Error(err))
+		rbm.logger.Errorw("Failed to get revision watcher", zap.Error(err), zap.String(logkey.Key, revID.String()))
 		return
 	}
 	ready, notReady := endpointsToDests(endpoints, pkgnet.ServicePortName(rw.protocol))
-	logger.Debugf("Updating Endpoints: ready backends: %d, not-ready backends: %d", len(ready), len(notReady))
 	select {
 	case <-rbm.ctx.Done():
 		return
@@ -517,7 +514,7 @@ func (rbm *revisionBackendsManager) endpointsDeleted(obj interface{}) {
 	ep := obj.(*corev1.Endpoints)
 	revID := types.NamespacedName{Namespace: ep.Namespace, Name: ep.Labels[serving.RevisionLabelKey]}
 
-	rbm.logger.Debugw("Deleting endpoint", zap.Object(logkey.Key, logging.NamespacedName(revID)))
+	rbm.logger.Debugw("Deleting endpoint", zap.String(logkey.Key, revID.String()))
 	rbm.revisionWatchersMux.Lock()
 	defer rbm.revisionWatchersMux.Unlock()
 	rbm.deleteRevisionWatcher(revID)

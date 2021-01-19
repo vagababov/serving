@@ -18,13 +18,14 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/trace"
 	"go.uber.org/zap"
+	"k8s.io/apimachinery/pkg/types"
 
 	network "knative.dev/networking/pkg"
 	"knative.dev/pkg/logging"
@@ -33,13 +34,13 @@ import (
 	"knative.dev/pkg/tracing/propagation/tracecontextb3"
 	"knative.dev/serving/pkg/activator"
 	activatorconfig "knative.dev/serving/pkg/activator/config"
-	"knative.dev/serving/pkg/activator/util"
+	pkghttp "knative.dev/serving/pkg/http"
 	"knative.dev/serving/pkg/queue"
 )
 
 // Throttler is the interface that Handler calls to Try to proxy the user request.
 type Throttler interface {
-	Try(context.Context, func(string) error) error
+	Try(ctx context.Context, revID types.NamespacedName, fn func(string) error) error
 }
 
 // activationHandler will wait for an active endpoint for a revision
@@ -52,12 +53,12 @@ type activationHandler struct {
 }
 
 // New constructs a new http.Handler that deals with revision activation.
-func New(ctx context.Context, t Throttler, transport http.RoundTripper) http.Handler {
+func New(_ context.Context, t Throttler, transport http.RoundTripper) http.Handler {
 	return &activationHandler{
 		transport: transport,
 		tracingTransport: &ochttp.Transport{
 			Base:        transport,
-			Propagation: tracecontextb3.B3Egress,
+			Propagation: tracecontextb3.TraceContextB3Egress,
 		},
 		throttler:  t,
 		bufferPool: network.NewBufferPool(),
@@ -73,17 +74,14 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tryContext, trySpan = trace.StartSpan(r.Context(), "throttler_try")
 	}
 
-	if err := a.throttler.Try(tryContext, func(dest string) error {
+	if err := a.throttler.Try(tryContext, revIDFrom(r.Context()), func(dest string) error {
 		trySpan.End()
 
 		proxyCtx, proxySpan := r.Context(), (*trace.Span)(nil)
 		if tracingEnabled {
 			proxyCtx, proxySpan = trace.StartSpan(r.Context(), "activator_proxy")
 		}
-		a.proxyRequest(logger, w, r.WithContext(proxyCtx), &url.URL{
-			Scheme: "http",
-			Host:   dest,
-		}, tracingEnabled)
+		a.proxyRequest(logger, w, r.WithContext(proxyCtx), dest, tracingEnabled)
 		proxySpan.End()
 
 		return nil
@@ -94,21 +92,20 @@ func (a *activationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		logger.Errorw("Throttler try error", zap.Error(err))
 
-		switch err {
-		case context.DeadlineExceeded, queue.ErrRequestQueueFull:
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, queue.ErrRequestQueueFull) {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		default:
+		} else {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	}
 }
 
-func (a *activationHandler) proxyRequest(logger *zap.SugaredLogger, w http.ResponseWriter, r *http.Request, target *url.URL, tracingEnabled bool) {
+func (a *activationHandler) proxyRequest(logger *zap.SugaredLogger, w http.ResponseWriter, r *http.Request, target string, tracingEnabled bool) {
 	network.RewriteHostIn(r)
 	r.Header.Set(network.ProxyHeaderName, activator.Name)
 
 	// Set up the reverse proxy.
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy := pkghttp.NewHeaderPruningReverseProxy(target, activator.RevisionHeaders)
 	proxy.BufferPool = a.bufferPool
 	proxy.Transport = a.transport
 	if tracingEnabled {
@@ -116,7 +113,6 @@ func (a *activationHandler) proxyRequest(logger *zap.SugaredLogger, w http.Respo
 	}
 	proxy.FlushInterval = network.FlushInterval
 	proxy.ErrorHandler = pkgnet.ErrorHandler(logger)
-	util.SetupHeaderPruning(proxy)
 
 	proxy.ServeHTTP(w, r)
 }

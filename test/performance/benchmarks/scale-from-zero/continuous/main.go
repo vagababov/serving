@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/watch"
 	"knative.dev/pkg/test/mako"
+	"knative.dev/pkg/test/spoof"
 	"knative.dev/serving/pkg/apis/serving"
 	"knative.dev/serving/test/performance"
 
@@ -65,7 +66,7 @@ const (
 func clientsFromConfig() (*test.Clients, error) {
 	cfg, err := injection.GetRESTConfig("", "")
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %v", err)
+		return nil, fmt.Errorf("error building kubeconfig: %w", err)
 	}
 	return test.NewClientsFromConfig(cfg, testNamespace)
 }
@@ -112,7 +113,7 @@ func createServices(clients *test.Clients, count int) ([]*v1test.ResourceObjects
 		g.Go(func() error {
 			var err error
 			if objs[ndx], err = v1test.CreateServiceReady(&testing.T{}, clients, testNames[ndx], sos...); err != nil {
-				return fmt.Errorf("%02d: failed to create Ready service: %v", ndx, err)
+				return fmt.Errorf("%02d: failed to create Ready service: %w", ndx, err)
 			}
 			return nil
 		})
@@ -207,7 +208,7 @@ func runScaleFromZero(ctx context.Context, clients *test.Clients, idx int, ro *v
 			clients.KubeClient,
 			log.Printf,
 			url,
-			pkgTest.MatchesAllOf(pkgTest.IsStatusOK, pkgTest.MatchesBody(helloWorldExpectedOutput)),
+			spoof.MatchesAllOf(spoof.IsStatusOK, spoof.MatchesBody(helloWorldExpectedOutput)),
 			"HelloWorldServesText",
 			test.ServingFlags.ResolvableDomain, waitToServe,
 		)

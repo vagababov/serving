@@ -20,6 +20,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -37,6 +38,7 @@ import (
 
 	pkgTest "knative.dev/pkg/test"
 	"knative.dev/pkg/test/ingress"
+	"knative.dev/pkg/test/spoof"
 	"knative.dev/serving/pkg/apis/autoscaling"
 	rtesting "knative.dev/serving/pkg/testing/v1"
 	"knative.dev/serving/test"
@@ -150,7 +152,7 @@ func loadBalancingTest(ctx *TestContext, host, domain string) {
 				default:
 					got, err := pingGRPC(host, domain, wantPrefix)
 					if err != nil {
-						return fmt.Errorf("ping gRPC error: %v", err)
+						return fmt.Errorf("ping gRPC error: %w", err)
 					}
 					if !strings.HasPrefix(got, wantPrefix) {
 						return fmt.Errorf("response = %q, wantPrefix = %q", got, wantPrefix)
@@ -203,7 +205,7 @@ func generateGRPCTraffic(concurrentRequests int, host, domain string, stopChan c
 					got, err := pingGRPC(host, domain, want)
 
 					if err != nil {
-						return fmt.Errorf("ping gRPC error: %v", err)
+						return fmt.Errorf("ping gRPC error: %w", err)
 					}
 					if got != want {
 						return fmt.Errorf("response = %q, want = %q", got, want)
@@ -213,7 +215,7 @@ func generateGRPCTraffic(concurrentRequests int, host, domain string, stopChan c
 		})
 	}
 	if err := grp.Wait(); err != nil {
-		return fmt.Errorf("error processing requests %v", err)
+		return fmt.Errorf("error processing requests %w", err)
 	}
 	return nil
 }
@@ -230,7 +232,7 @@ func pingGRPC(host, domain, message string) (string, error) {
 
 	got, err := pc.Ping(context.Background(), want)
 	if err != nil {
-		return "", fmt.Errorf("could not send request: %v", err)
+		return "", fmt.Errorf("could not send request: %w", err)
 	}
 	return got.Msg, nil
 }
@@ -308,7 +310,7 @@ func streamTest(tc *TestContext, host, domain string) {
 	stream.CloseSend()
 
 	_, err = stream.Recv()
-	if err != io.EOF {
+	if !errors.Is(err, io.EOF) {
 		tc.t.Errorf("Expected EOF, got %v", err)
 	}
 }
@@ -322,15 +324,15 @@ func testGRPC(t *testing.T, f grpcTest, fopts ...rtesting.ServiceOption) {
 
 	t.Log("Creating service for grpc-ping")
 
-	names := test.ResourceNames{
+	names := &test.ResourceNames{
 		Service: test.ObjectNameForTest(t),
 		Image:   "grpc-ping",
 	}
 
 	fopts = append(fopts, rtesting.WithNamedPort("h2c"))
 
-	test.EnsureTearDown(t, clients, &names)
-	resources, err := v1test.CreateServiceReady(t, clients, &names, fopts...)
+	test.EnsureTearDown(t, clients, names)
+	resources, err := v1test.CreateServiceReady(t, clients, names, fopts...)
 	if err != nil {
 		t.Fatalf("Failed to create initial Service: %v: %v", names.Service, err)
 	}
@@ -341,7 +343,7 @@ func testGRPC(t *testing.T, f grpcTest, fopts ...rtesting.ServiceOption) {
 		clients.KubeClient,
 		t.Logf,
 		url,
-		v1test.RetryingRouteInconsistency(pkgTest.IsStatusOK),
+		v1test.RetryingRouteInconsistency(spoof.IsStatusOK),
 		"gRPCPingReadyToServe",
 		test.ServingFlags.ResolvableDomain,
 		test.AddRootCAtoTransport(context.Background(), t.Logf, clients, test.ServingFlags.HTTPS),
@@ -360,6 +362,7 @@ func testGRPC(t *testing.T, f grpcTest, fopts ...rtesting.ServiceOption) {
 
 	f(&TestContext{
 		t:         t,
+		logf:      t.Logf,
 		clients:   clients,
 		names:     names,
 		resources: resources,

@@ -26,6 +26,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -95,7 +96,7 @@ func New(
 	opts ...TransportOption) (*SpoofingClient, error) {
 	endpoint, mapper, err := ResolveEndpoint(ctx, kubeClientset, domain, resolvable, endpointOverride)
 	if err != nil {
-		return nil, fmt.Errorf("failed get the cluster endpoint: %w", err)
+		return nil, fmt.Errorf("failed to get the cluster endpoint: %w", err)
 	}
 
 	// Spoof the hostname at the resolver level
@@ -237,10 +238,36 @@ func (sc *SpoofingClient) logZipkinTrace(spoofResp *Response) {
 
 	json, err := zipkin.JSONTrace(traceID /* We don't know the expected number of spans */, -1, 5*time.Second)
 	if err != nil {
-		if _, ok := err.(*zipkin.TimeoutError); !ok {
+		var errTimeout *zipkin.TimeoutError
+		if !errors.As(err, &errTimeout) {
 			sc.Logf("Error getting zipkin trace: %v", err)
 		}
 	}
 
 	sc.Logf("%s", json)
+}
+
+func (sc *SpoofingClient) WaitForEndpointState(
+	ctx context.Context,
+	url *url.URL,
+	inState ResponseChecker,
+	desc string,
+	opts ...RequestOption) (*Response, error) {
+
+	defer logging.GetEmitableSpan(ctx, "WaitForEndpointState/"+desc).End()
+
+	if url.Scheme == "" || url.Host == "" {
+		return nil, fmt.Errorf("invalid URL: %q", url.String())
+	}
+
+	req, err := http.NewRequest(http.MethodGet, url.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, opt := range opts {
+		opt(req)
+	}
+
+	return sc.Poll(req, inState)
 }

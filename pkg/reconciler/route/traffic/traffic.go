@@ -18,12 +18,14 @@ package traffic
 
 import (
 	"context"
+	"errors"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrs "k8s.io/apimachinery/pkg/api/errors"
 
 	net "knative.dev/networking/pkg/apis/networking"
 	netv1alpha1 "knative.dev/networking/pkg/apis/networking/v1alpha1"
+	"knative.dev/pkg/apis"
 	"knative.dev/pkg/ptr"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
@@ -35,11 +37,10 @@ import (
 // DefaultTarget is the unnamed default target for the traffic.
 const DefaultTarget = ""
 
-// A RevisionTarget adds the Active/Inactive state and the transport protocol of a
+// A RevisionTarget adds the transport protocol and the service name of a
 // Revision to a flattened TrafficTarget.
 type RevisionTarget struct {
 	v1.TrafficTarget
-	Active      bool
 	Protocol    net.ProtocolType
 	ServiceName string // Revision service name.
 }
@@ -60,9 +61,8 @@ type Config struct {
 	Visibility map[string]netv1alpha1.IngressVisibility
 
 	// A list traffic targets, flattened to the Revision level.  This
-	// is used to populate the Route.Status.TrafficTarget field as well
-	// as compute the rollout state.
-	RevisionTargets RevisionTargets
+	// is used to populate the Route.Status.TrafficTarget field.
+	revisionTargets RevisionTargets
 
 	// The referred `Configuration`s and `Revision`s.
 	Configurations map[string]*v1.Configuration
@@ -88,39 +88,93 @@ func BuildTrafficConfiguration(configLister listers.ConfigurationLister, revList
 	return builder.build()
 }
 
-// GetRevisionTrafficTargets returns a list of TrafficTarget flattened to the RevisionName, and having ConfigurationName cleared out.
-func (cfg *Config) GetRevisionTrafficTargets(ctx context.Context, r *v1.Route) ([]v1.TrafficTarget, error) {
-	results := make([]v1.TrafficTarget, len(cfg.RevisionTargets))
-	for i, tt := range cfg.RevisionTargets {
-		var pp *int64
-		if tt.Percent != nil {
-			pp = ptr.Int64(*tt.Percent)
+func rolloutConfig(cfgName string, ros []*ConfigurationRollout) *ConfigurationRollout {
+	for _, ro := range ros {
+		if ro.ConfigurationName == cfgName {
+			return ro
 		}
+	}
+	// Technically impossible with valid inputs.
+	return nil
+}
 
+func (cfg *Config) computeURL(ctx context.Context, r *v1.Route, tt *RevisionTarget) (*apis.URL, error) {
+	meta := r.ObjectMeta.DeepCopy()
+
+	hostname, err := domains.HostnameFromTemplate(ctx, meta.Name, tt.Tag)
+	if err != nil {
+		return nil, err
+	}
+
+	labels.SetVisibility(meta, cfg.Visibility[tt.Tag] == netv1alpha1.IngressVisibilityClusterLocal)
+
+	// HTTP is currently the only supported scheme.
+	fullDomain, err := domains.DomainNameFromTemplate(ctx, *meta, hostname)
+	if err != nil {
+		return nil, err
+	}
+	return domains.URL(domains.HTTPScheme, fullDomain), nil
+}
+
+func (cfg *Config) targetToStatus(ctx context.Context, r *v1.Route, tt *RevisionTarget,
+	revs []RevisionRollout, results []v1.TrafficTarget) (_ []v1.TrafficTarget, err error) {
+	var url *apis.URL
+	// Do this once per tag.
+	if tt.Tag != "" {
+		url, err = cfg.computeURL(ctx, r, tt)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for i := range revs {
+		rr := &revs[i]
 		// We cannot `DeepCopy` here, since tt.TrafficTarget might contain both
 		// configuration and revision.
-		results[i] = v1.TrafficTarget{
+		result := v1.TrafficTarget{
 			Tag:            tt.Tag,
-			RevisionName:   tt.RevisionName,
-			Percent:        pp,
+			RevisionName:   rr.RevisionName,
+			Percent:        ptr.Int64(int64(rr.Percent)),
 			LatestRevision: tt.LatestRevision,
 		}
+
 		if tt.Tag != "" {
-			meta := r.ObjectMeta.DeepCopy()
+			result.URL = url
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
 
-			hostname, err := domains.HostnameFromTemplate(ctx, meta.Name, tt.Tag)
-			if err != nil {
-				return nil, err
-			}
+// GetRevisionTrafficTargets returns a list of TrafficTarget flattened to the RevisionName, and having ConfigurationName cleared out.
+func (cfg *Config) GetRevisionTrafficTargets(ctx context.Context, r *v1.Route, ro *Rollout) ([]v1.TrafficTarget, error) {
+	results := make([]v1.TrafficTarget, 0, len(cfg.revisionTargets))
+	for i := range cfg.revisionTargets {
+		tt := &cfg.revisionTargets[i]
+		var (
+			roCfg *ConfigurationRollout
+			revs  []RevisionRollout
+			err   error
+		)
 
-			labels.SetVisibility(meta, cfg.Visibility[tt.Tag] == netv1alpha1.IngressVisibilityClusterLocal)
+		if tt.LatestRevision != nil && *tt.LatestRevision {
+			cfgs := ro.RolloutsByTag(tt.Tag)
+			roCfg = rolloutConfig(tt.ConfigurationName, cfgs)
+		}
 
-			// HTTP is currently the only supported scheme.
-			fullDomain, err := domains.DomainNameFromTemplate(ctx, *meta, hostname)
-			if err != nil {
-				return nil, err
-			}
-			results[i].URL = domains.URL(domains.HTTPScheme, fullDomain)
+		// Not a rollout, or just a revision target. Setup mock revision rollout
+		// with a single element.
+		if roCfg == nil {
+			revs = []RevisionRollout{{
+				RevisionName: tt.RevisionName,
+				Percent:      int(*tt.Percent),
+			}}
+		} else {
+			revs = roCfg.Revisions
+		}
+		results, err = cfg.targetToStatus(ctx, r, tt, revs, results)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return results, nil
@@ -167,35 +221,48 @@ func newBuilder(
 
 // BuildRollout builds the current rollout state.
 // It is expected to be invoked after applySpecTraffic.
+// Returned Rollout will be sorted by tag and within tag by configuration
+// (only default tag can have more than configuration object attached).
 // TODO(vagababov): actually deal with rollouts, vs just report desired state.
 func (cfg *Config) BuildRollout() *Rollout {
 	rollout := &Rollout{}
 
-	for _, rt := range cfg.RevisionTargets {
+	for tag, targets := range cfg.Targets {
+		buildRolloutForTag(rollout, tag, targets)
+	}
+	sortRollout(rollout)
+	return rollout
+}
+
+// buildRolloutForTag builds the current rollout state.
+// It is expected to be invoked after applySpecTraffic.
+// TODO(vagababov): actually deal with rollouts, vs just report desired state.
+func buildRolloutForTag(r *Rollout, tag string, rts RevisionTargets) {
+	// Only main target will have more than 1 element here.
+	for _, rt := range rts {
+		// Skip if it's revision target.
 		if rt.LatestRevision == nil || !*rt.LatestRevision {
 			continue
 		}
 
-		// We know here that mergeIfNecessary will pack the same config targets together.
-		// So no need to check for duplicates.
-		rollout.Configurations = append(rollout.Configurations, ConfigurationRollout{
+		// Ignore the rollouts with 0 percent target traffic.
+		// This can happen only for the default tag.
+		if *rt.Percent == 0 {
+			continue
+		}
+		// The targets with the same revision are already joined together.
+		r.Configurations = append(r.Configurations, &ConfigurationRollout{
 			ConfigurationName: rt.ConfigurationName,
-			Tag:               rt.Tag,
-			// TODO(vagababov): here will go all the fancy math.
+			Tag:               tag,
+			Percent:           int(*rt.Percent),
 			Revisions: []RevisionRollout{{
 				RevisionName: rt.RevisionName,
-				Percent:      zeroOrVal(rt.Percent),
+				// Note: this will match config value in steady state, but
+				// during rollout it will be overridden by the rollout logic.
+				Percent: int(*rt.Percent),
 			}},
 		})
 	}
-	return rollout
-}
-
-func zeroOrVal(p *int64) int {
-	if p != nil {
-		return int(*p)
-	}
-	return 0
 }
 
 func (cb *configBuilder) applySpecTraffic(traffic []v1.TrafficTarget) error {
@@ -213,7 +280,7 @@ func (cb *configBuilder) getConfiguration(name string) (*v1.Configuration, error
 	if !ok {
 		var err error
 		config, err = cb.configLister.Get(name)
-		if errors.IsNotFound(err) {
+		if apierrs.IsNotFound(err) {
 			return nil, errMissingConfiguration(name)
 		} else if err != nil {
 			return nil, err
@@ -228,7 +295,7 @@ func (cb *configBuilder) getRevision(name string) (*v1.Revision, error) {
 	if !ok {
 		var err error
 		rev, err = cb.revLister.Get(name)
-		if errors.IsNotFound(err) {
+		if apierrs.IsNotFound(err) {
 			return nil, errMissingRevision(name)
 		} else if err != nil {
 			return nil, err
@@ -253,23 +320,28 @@ func (cb *configBuilder) addTrafficTarget(tt *v1.TrafficTarget) error {
 	} else if tt.ConfigurationName != "" {
 		err = cb.addConfigurationTarget(tt)
 	}
-	if err, ok := err.(*missingTargetError); err != nil && ok {
-		apiVersion, kind := v1.SchemeGroupVersion.
-			WithKind(err.kind).
-			ToAPIVersionAndKind()
+	if err != nil {
+		var errMissingTarget *missingTargetError
+		if errors.As(err, &errMissingTarget) {
+			apiVersion, kind := v1.SchemeGroupVersion.
+				WithKind(errMissingTarget.kind).
+				ToAPIVersionAndKind()
 
-		cb.missingTargets = append(cb.missingTargets, corev1.ObjectReference{
-			APIVersion: apiVersion,
-			Kind:       kind,
-			Name:       err.name,
-			Namespace:  cb.route.Namespace,
-		})
-	}
-	if err, ok := err.(TargetError); err != nil && ok {
-		// Defer target errors, as we still want to compile a list of
-		// all referred targets, including missing ones.
-		cb.deferTargetError(err)
-		return nil
+			cb.missingTargets = append(cb.missingTargets, corev1.ObjectReference{
+				APIVersion: apiVersion,
+				Kind:       kind,
+				Name:       errMissingTarget.name,
+				Namespace:  cb.route.Namespace,
+			})
+		}
+
+		var errTarget TargetError
+		if errors.As(err, &errTarget) {
+			// Defer target errors, as we still want to compile a list of
+			// all referred targets, including missing ones.
+			cb.deferTargetError(errTarget)
+			return nil
+		}
 	}
 	return err
 }
@@ -291,7 +363,6 @@ func (cb *configBuilder) addConfigurationTarget(tt *v1.TrafficTarget) error {
 	ntt := tt.DeepCopy()
 	target := RevisionTarget{
 		TrafficTarget: *ntt,
-		Active:        !rev.Status.IsActivationRequired(),
 		Protocol:      rev.GetProtocol(),
 		ServiceName:   rev.Status.ServiceName,
 	}
@@ -311,7 +382,6 @@ func (cb *configBuilder) addRevisionTarget(tt *v1.TrafficTarget) error {
 	ntt := tt.DeepCopy()
 	target := RevisionTarget{
 		TrafficTarget: *ntt,
-		Active:        !rev.Status.IsActivationRequired(),
 		Protocol:      rev.GetProtocol(),
 		ServiceName:   rev.Status.ServiceName,
 	}
@@ -325,21 +395,13 @@ func (cb *configBuilder) addRevisionTarget(tt *v1.TrafficTarget) error {
 	return nil
 }
 
-// valIfNil returns `val` if `ptr==nil`, or `*ptr` otherwise.
-func valIfNil(val int64, ptr *int64) int64 {
-	if ptr == nil {
-		return val
-	}
-	return *ptr
-}
-
 // This find the exact revision+tag pair and if so, just adds the percentages.
 // This expects single digit lists, so just does an O(N) search.
 func mergeIfNecessary(rts RevisionTargets, rt RevisionTarget) RevisionTargets {
 	for i := range rts {
 		if rts[i].Tag == rt.Tag && rts[i].RevisionName == rt.RevisionName &&
 			*rt.LatestRevision == *rts[i].LatestRevision {
-			rts[i].Percent = ptr.Int64(valIfNil(0, rts[i].Percent) + valIfNil(0, rt.Percent))
+			rts[i].Percent = ptr.Int64(*rts[i].Percent + *rt.Percent)
 			return rts
 		}
 	}
@@ -363,7 +425,7 @@ func (cb *configBuilder) build() (*Config, error) {
 	}
 	return &Config{
 		Targets:         consolidateAll(cb.targets),
-		RevisionTargets: cb.revisionTargets,
+		revisionTargets: cb.revisionTargets,
 		Configurations:  cb.configurations,
 		Revisions:       cb.revisions,
 		MissingTargets:  cb.missingTargets,

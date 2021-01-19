@@ -45,6 +45,7 @@ If you're working on and changing `.proto` files:
 ### Create a cluster and a repo
 
 1. [Set up a Kubernetes cluster](https://kubernetes.io/docs/setup/)
+   - Minimum supported version is 1.17.0
    - Follow the instructions in the Kubernetes doc.
 1. Set up a docker repository for pushing images. You can use any container
    image registry by adjusting the authentication methods and repository paths
@@ -87,10 +88,6 @@ export KO_DOCKER_REPO='gcr.io/my-gcloud-project-id'
 
 ### Check out your fork
 
-The Go tools require that you clone the repository to the
-`src/knative.dev/serving` directory in your
-[`GOPATH`](https://github.com/golang/go/wiki/SettingGOPATH).
-
 To check out this repository:
 
 1. Create your own
@@ -98,8 +95,6 @@ To check out this repository:
 1. Clone it to your machine:
 
 ```shell
-mkdir -p ${GOPATH}/src/knative.dev
-cd ${GOPATH}/src/knative.dev
 git clone git@github.com:${YOUR_GITHUB_USERNAME}/serving.git
 cd serving
 git remote add upstream https://github.com/knative/serving.git
@@ -139,54 +134,14 @@ Kubernetes installation. Please go back to
 [your cluster setup](https://www.knative.dev/docs/install/) to reconfigure your
 Kubernetes cluster in your designated environment, if necessary.
 
-### Deploy Istio
-
-```shell
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-crds.yaml"
-while [[ $(kubectl get crd gateways.networking.istio.io -o jsonpath='{.status.conditions[?(@.type=="Established")].status}') != 'True' ]]; do
-  echo "Waiting on Istio CRDs"; sleep 1
-done
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-minimal.yaml"
-kubectl apply -f ./third_party/net-istio.yaml
-```
-
-Follow the
-[instructions](https://www.knative.dev/docs/serving/gke-assigning-static-ip-address/)
-if you need to set up static IP for Ingresses in the cluster.
-
-If you want to adopt preinstalled Istio, please check whether the
-`cluster-local-gateway` Service is deployed in namespace `istio-system` or not
-(you can check by running
-`kubectl get service cluster-local-gateway -n istio-system`). If it's not
-installed, please install it with the following command. You could also adjust
-parameters if needed.
-
-```shell
-kubectl apply -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-knative-extras.yaml"
-```
-
-> If you want to customize the `istio*.yaml` files you can refer to the
-> [Istio installation doc](https://github.com/knative/docs/blob/master/docs/install/installing-istio.md)
-> for more information.
-
 ### Deploy cert-manager
-
-1. Deploy `cert-manager` CRDs
-
-   ```shell
-   kubectl apply -f ./third_party/cert-manager-0.12.0/cert-manager-crds.yaml
-   while [[ $(kubectl get crd certificates.cert-manager.io -o jsonpath='{.status.conditions[?(@.type=="Established")].status}') != 'True' ]]; do
-     echo "Waiting on Cert-Manager CRDs"; sleep 1
-   done
-   ```
 
 1. Deploy `cert-manager`
 
-   If you want to use the feature of automatically provisioning TLS for Knative
-   services, you need to install the full cert-manager.
-
    ```shell
-   kubectl apply -f ./third_party/cert-manager-0.12.0/cert-manager.yaml
+   kubectl apply -f ./third_party/cert-manager-latest/cert-manager.yaml
+   kubectl wait --for=condition=Established --all crd
+   kubectl wait --for=condition=Available -n cert-manager --all deployments
    ```
 
 ### Deploy Knative Serving
@@ -202,14 +157,15 @@ Run:
 
 ```shell
 ko apply --selector knative.dev/crd-install=true -Rf config/core/
-while [[ $(kubectl get crd images.caching.internal.knative.dev -o jsonpath='{.status.conditions[?(@.type=="Established")].status}') != 'True' ]]; do
-  echo "Waiting on Knative CRDs"; sleep 1
-done
+kubectl wait --for=condition=Established --all crd
 
 ko apply -Rf config/core/
-kubectl apply -f ./third_party/net-istio.yaml
 
 # Optional steps
+
+# Install DomainMapping Components. Enables the DomainMapping feature.
+# Needed to pass conformance tests if the `--enable-alpha` flag is passed.
+ko apply -Rf config/domain-mapping/
 
 # Run post-install job to set up nice XIP.IO domain name.  This only works
 # if your Kubernetes LoadBalancer has an IPv4 address.
@@ -219,8 +175,7 @@ ko apply -f config/post-install/default-domain.yaml
 
 The above step is equivalent to applying the `serving-crds.yaml`,
 `serving-core.yaml`, `serving-hpa.yaml` and `serving-nscert.yaml` for released
-versions of Knative Serving and additionally applying **net-istio** as the
-ingress implementation.
+versions of Knative Serving.
 
 You can see things running with:
 
@@ -231,8 +186,6 @@ activator-7454cd659f-rrz86            1/1     Running   0          105s
 autoscaler-58cbfd4985-fl5h7           1/1     Running   0          105s
 autoscaler-hpa-77964b9b8c-9sbgq       1/1     Running   0          105s
 controller-847b7cc977-5mvvq           1/1     Running   0          105s
-istio-webhook-69bf66f869-cgc4l        1/1     Running   0          105s
-networking-istio-dcf7944fb-5m25h      1/1     Running   0          105s
 networking-ns-cert-56c58544db-sgstd   1/1     Running   0          105s
 webhook-6b6c77567f-flr59              1/1     Running   0          105s
 ```
@@ -248,6 +201,25 @@ check the
 [Discovery & load balancing](http://console.developers.google.com/kubernetes/discovery)
 page to ensure that all services are up and running (and not blocked by a quota
 issue, for example).
+
+### Deploy Knative Ingress
+
+Knative supports a variety of Ingress solutions.
+
+For simplicity, you can just run the following command to install Kourier.
+
+```
+kubectl apply -f ./third_party/kourier-latest/kourier.yaml
+
+kubectl patch configmap/config-network \
+  -n knative-serving \
+  --type merge \
+  -p '{"data":{"ingress.class":"kourier.ingress.networking.knative.dev"}}'
+```
+
+If you want to choose another Ingress solution, you can follow step 3 in the
+[Knative installation doc](https://knative.dev/docs/install/any-kubernetes-cluster/#installing-the-serving-component)
+to pick up an alternative Ingress solution and install it.
 
 ## Iterating
 
@@ -295,22 +267,11 @@ To update existing dependencies execute
 
 ## Clean up
 
-You can delete all of the service components with:
+You can delete all of the serving components with:
 
 ```shell
 ko delete --ignore-not-found=true \
   -Rf config/core/ \
-  -f ./third_party/net-istio.yaml \
-  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-minimal.yaml" \
-  -f "https://raw.githubusercontent.com/knative-sandbox/net-istio/master/third_party/istio-stable/istio-crds.yaml" \
-  -f ./third_party/cert-manager-0.12.0/cert-manager-crds.yaml \
-  -f ./third_party/cert-manager-0.12.0/cert-manager.yaml
+  -f ./third_party/kourier-latest/kourier.yaml \
+  -f ./third_party/cert-manager-latest/cert-manager.yaml
 ```
-
-## Telemetry
-
-To access Telemetry see:
-
-- [Accessing Metrics](https://www.knative.dev/docs/serving/accessing-metrics/)
-- [Accessing Logs](https://www.knative.dev/docs/serving/accessing-logs/)
-- [Accessing Traces](https://www.knative.dev/docs/serving/accessing-traces/)

@@ -36,14 +36,17 @@ jobs:
           kind-version: v0.9.0
           kind-image-sha: sha256:5240a7a2c34bf241afb54ac05669f8a46661912eab05705d660971eeb12f6555
           kingress: istio
+          cluster-suffix: c${{ github.run_id }}.local
         - k8s-version: v1.18.8
           kind-version: v0.9.0
           kind-image-sha: sha256:f4bcc97a0ad6e7abaf3f643d890add7efe6ee4ab90baeb374b4f41a4c95567eb
           kingress: kourier
+          cluster-suffix: c${{ github.run_id }}.local
         - k8s-version: v1.19.1
           kind-version: v0.9.0
           kind-image-sha: sha256:98cf5288864662e37115e362b23e4369c8c4a408f99cbc06e58ac30ddc721600
           kingress: contour
+          cluster-suffix: c${{ github.run_id }}.local
 
           # The tests in api/v1alpha1 require the --enable-alpha flag to be set,
           # and alpha components to be deployed.
@@ -53,6 +56,7 @@ jobs:
     env:
       GOPATH: ${{ github.workspace }}
       GO111MODULE: off
+      GOFLAGS: -tags=nostackdriver
       # https://github.com/google/go-containerregistry/pull/125 allows insecure registry for
       # '*.local' hostnames. This works both for `ko` and our own tag-to-digest resolution logic,
       # thus allowing us to test without bypassing tag-to-digest resolution.
@@ -69,7 +73,11 @@ jobs:
     - name: Install Dependencies
       working-directory: ./
       run: |
-        GO111MODULE=on go get github.com/google/ko/cmd/ko@master
+        echo '::group:: install ko'
+        curl -L https://github.com/google/ko/releases/download/v0.6.0/ko_0.6.0_Linux_x86_64.tar.gz | tar xzf - ko
+        chmod +x ./ko
+        sudo mv ko /usr/local/bin
+        echo '::endgroup::'
 
     - name: Check out code onto GOPATH
       uses: actions/checkout@v2
@@ -117,6 +125,8 @@ jobs:
               extraArgs:
                 "service-account-issuer": "kubernetes.default.svc"
                 "service-account-signing-key-file": "/etc/kubernetes/pki/sa.key"
+            networking:
+              dnsDomain: "${{ matrix.cluster-suffix }}"
 
         nodes:
         - role: control-plane
@@ -167,12 +177,11 @@ jobs:
       run: |
         set -o pipefail
 
-        kubectl create namespace knative-serving
         kubectl apply -f config/core/300-imagecache.yaml
 
         # Build and Publish our containers to the docker daemon (including test assets)
-        ko apply --platform=all -Pf test/config/
-        ko apply --platform=all -PRf config/core
+        ko apply --platform=linux/amd64 -PRf config/core
+        ko apply --platform=linux/amd64 -Pf test/config/
 
         # Have Serving use the kingress option.
         kubectl patch configmap/config-network \
@@ -219,7 +228,6 @@ jobs:
         # Apply a kingress option.
         ko resolve -f third_party/kourier-latest | \
           sed 's/LoadBalancer/NodePort/g' | \
-          sed 's/imagePullPolicy:/# DISABLED: imagePullPolicy:/g' | \
           kubectl apply -f -
 
         # This tells the tests what namespace to look in for our kingress LB.
@@ -234,8 +242,7 @@ jobs:
         source test/e2e-networking-library.sh
 
         PATCHED_YAML=$(mktemp)
-        ko resolve -f third_party/net-istio.yaml | \
-          sed 's/imagePullPolicy:/# DISABLED: imagePullPolicy:/g' > $PATCHED_YAML
+        ko resolve -f third_party/istio-latest/net-istio.yaml > $PATCHED_YAML
 
         # TODO: figure out how to use e2e-common.sh directly even if no
         # custom namespace is used here.
@@ -243,6 +250,7 @@ jobs:
         KNATIVE_DEFAULT_NAMESPACE="knative-serving"
         SYSTEM_NAMESPACE=$KNATIVE_DEFAULT_NAMESPACE
         export KIND=true
+        export CLUSTER_DOMAIN="${{ matrix.cluster-suffix }}"
         install_istio $PATCHED_YAML
 
         echo "GATEWAY_NAMESPACE_OVERRIDE=istio-system" >> $GITHUB_ENV

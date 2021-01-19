@@ -1538,7 +1538,7 @@ func TestGlobalResyncOnUpdateDomainConfigMap(t *testing.T) {
 func TestRouteDomain(t *testing.T) {
 	route := Route("default", "myapp", WithRouteLabel(map[string]string{"route": "myapp"}), WithRouteAnnotation(map[string]string{"sub": "mysub"}))
 	ctx := context.Background()
-	cfg := ReconcilerTestConfig(false)
+	cfg := reconcilerTestConfig(false)
 	ctx = config.ToContext(ctx, cfg)
 
 	tests := []struct {
@@ -1562,10 +1562,10 @@ func TestRouteDomain(t *testing.T) {
 		Pass:     true,
 		Expected: "myapp.example.com",
 	}, {
-		Name:     "SuperShort",
+		Name:     "Too short", // domain must be at least two segments separated by dots.
 		Template: "{{.Name}}",
-		Pass:     true,
-		Expected: "myapp",
+		Pass:     false,
+		Expected: "",
 	}, {
 		Name:     "Annotations",
 		Template: `{{.Name}}.{{ index .Annotations "sub"}}.{{.Domain}}`,

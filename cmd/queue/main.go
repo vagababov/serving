@@ -18,14 +18,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -46,7 +44,7 @@ import (
 	"knative.dev/pkg/tracing"
 	tracingconfig "knative.dev/pkg/tracing/config"
 	"knative.dev/pkg/tracing/propagation/tracecontextb3"
-	activatorutil "knative.dev/serving/pkg/activator/util"
+	"knative.dev/serving/pkg/activator"
 	pkghttp "knative.dev/serving/pkg/http"
 	"knative.dev/serving/pkg/http/handler"
 	"knative.dev/serving/pkg/logging"
@@ -63,13 +61,15 @@ const (
 
 var (
 	readinessProbeTimeout = flag.Duration("probe-period", -1, "run readiness probe with given timeout")
-	unixSocketPath        = filepath.Join(os.TempDir(), "queue.sock")
+
+	// This creates an abstract socket instead of an actual file.
+	unixSocketPath = "@/knative.dev/serving/queue.sock"
 )
 
 type config struct {
 	ContainerConcurrency   int    `split_words:"true" required:"true"`
-	QueueServingPort       int    `split_words:"true" required:"true"`
-	UserPort               int    `split_words:"true" required:"true"`
+	QueueServingPort       string `split_words:"true" required:"true"`
+	UserPort               string `split_words:"true" required:"true"`
 	RevisionTimeoutSeconds int    `split_words:"true" required:"true"`
 	ServingReadinessProbe  string `split_words:"true" required:"true"`
 	EnableProfiling        bool   `split_words:"true"` // optional
@@ -133,10 +133,10 @@ func main() {
 	defer flush(logger)
 
 	logger = logger.Named("queueproxy").With(
-		zap.Object(logkey.Key, pkglogging.NamespacedName(types.NamespacedName{
+		zap.String(logkey.Key, types.NamespacedName{
 			Namespace: env.ServingNamespace,
 			Name:      env.ServingRevision,
-		})),
+		}.String()),
 		zap.String(logkey.Pod, env.ServingPod))
 
 	// Report stats on Go memory usage every 30 seconds.
@@ -194,7 +194,7 @@ func main() {
 			}
 
 			// Don't forward ErrServerClosed as that indicates we're already shutting down.
-			if err := s.Serve(l); err != nil && err != http.ErrServerClosed {
+			if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- fmt.Errorf("%s server failed to serve: %w", name, err)
 			}
 		}(name, server)
@@ -264,22 +264,19 @@ func buildProbe(logger *zap.SugaredLogger, probeJSON string) *readiness.Probe {
 
 func buildServer(ctx context.Context, env config, healthState *health.State, rp *readiness.Probe, stats *network.RequestStats,
 	logger *zap.SugaredLogger) *http.Server {
-	target := &url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort("127.0.0.1", strconv.Itoa(env.UserPort)),
-	}
 
 	maxIdleConns := 1000 // TODO: somewhat arbitrary value for CC=0, needs experimental validation.
 	if env.ContainerConcurrency > 0 {
 		maxIdleConns = env.ContainerConcurrency
 	}
 
-	httpProxy := httputil.NewSingleHostReverseProxy(target)
+	target := net.JoinHostPort("127.0.0.1", env.UserPort)
+
+	httpProxy := pkghttp.NewHeaderPruningReverseProxy(target, activator.RevisionHeaders)
 	httpProxy.Transport = buildTransport(env, logger, maxIdleConns)
 	httpProxy.ErrorHandler = pkgnet.ErrorHandler(logger)
 	httpProxy.BufferPool = network.NewBufferPool()
 	httpProxy.FlushInterval = network.FlushInterval
-	activatorutil.SetupHeaderPruning(httpProxy)
 
 	breaker := buildBreaker(logger, env)
 	metricsSupported := supportsMetrics(ctx, logger, env)
@@ -307,7 +304,7 @@ func buildServer(ctx context.Context, env config, healthState *health.State, rp 
 	// logs. Hence we need to have RequestLogHandler to be the first one.
 	composedHandler = pushRequestLogHandler(logger, composedHandler, env)
 
-	return pkgnet.NewServer(":"+strconv.Itoa(env.QueueServingPort), composedHandler)
+	return pkgnet.NewServer(":"+env.QueueServingPort, composedHandler)
 }
 
 func buildTransport(env config, logger *zap.SugaredLogger, maxConns int) http.RoundTripper {
@@ -329,7 +326,7 @@ func buildTransport(env config, logger *zap.SugaredLogger, maxConns int) http.Ro
 
 	return &ochttp.Transport{
 		Base:        transport,
-		Propagation: tracecontextb3.B3Egress,
+		Propagation: tracecontextb3.TraceContextB3Egress,
 	}
 }
 
@@ -340,10 +337,13 @@ func buildBreaker(logger *zap.SugaredLogger, env config) *queue.Breaker {
 
 	// We set the queue depth to be equal to the container concurrency * 10 to
 	// allow the autoscaler time to react.
-	queueDepth := env.ContainerConcurrency * 10
-	params := queue.BreakerParams{QueueDepth: queueDepth, MaxConcurrency: env.ContainerConcurrency, InitialCapacity: env.ContainerConcurrency}
-	logger.Infof("Queue container is starting with %#v", params)
-
+	queueDepth := 10 * env.ContainerConcurrency
+	params := queue.BreakerParams{
+		QueueDepth:      queueDepth,
+		MaxConcurrency:  env.ContainerConcurrency,
+		InitialCapacity: env.ContainerConcurrency,
+	}
+	logger.Infof("Queue container is starting with BreakerParams = %#v", params)
 	return queue.NewBreaker(params)
 }
 

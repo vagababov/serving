@@ -18,7 +18,6 @@ package serving
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -249,94 +248,6 @@ func TestValidateHasNoAutoscalingAnnotation(t *testing.T) {
 	}
 }
 
-func TestValidateQueueSidecarAnnotation(t *testing.T) {
-	cases := []struct {
-		name       string
-		annotation map[string]string
-		expectErr  *apis.FieldError
-	}{{
-		name: "too small",
-		annotation: map[string]string{
-			QueueSideCarResourcePercentageAnnotation: "0.01982",
-		},
-		expectErr: &apis.FieldError{
-			Message: "expected 0.1 <= 0.01982 <= 100",
-			Paths:   []string{fmt.Sprintf("[%s]", QueueSideCarResourcePercentageAnnotation)},
-		},
-	}, {
-		name: "too big for Queue sidecar resource percentage annotation",
-		annotation: map[string]string{
-			QueueSideCarResourcePercentageAnnotation: "100.0001",
-		},
-		expectErr: &apis.FieldError{
-			Message: "expected 0.1 <= 100.0001 <= 100",
-			Paths:   []string{fmt.Sprintf("[%s]", QueueSideCarResourcePercentageAnnotation)},
-		},
-	}, {
-		name: "Invalid queue sidecar resource percentage annotation",
-		annotation: map[string]string{
-			QueueSideCarResourcePercentageAnnotation: "",
-		},
-		expectErr: &apis.FieldError{
-			Message: "invalid value: ",
-			Paths:   []string{fmt.Sprintf("[%s]", QueueSideCarResourcePercentageAnnotation)},
-		},
-	}, {
-		name:       "empty annotation",
-		annotation: map[string]string{},
-	}, {
-		name: "different annotation other than QueueSideCarResourcePercentageAnnotation",
-		annotation: map[string]string{
-			CreatorAnnotation: "umph",
-		},
-	}, {
-		name: "valid value for Queue sidecar resource percentage annotation",
-		annotation: map[string]string{
-			QueueSideCarResourcePercentageAnnotation: "0.1",
-		},
-	}, {
-		name: "valid value for Queue sidecar resource percentage annotation",
-		annotation: map[string]string{
-			QueueSideCarResourcePercentageAnnotation: "100",
-		},
-	}}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := ValidateQueueSidecarAnnotation(c.annotation)
-			if got, want := err.Error(), c.expectErr.Error(); got != want {
-				t.Errorf("\nGot:  %q\nwant: %q", got, want)
-			}
-		})
-	}
-}
-
-func TestValidateTimeoutSecond(t *testing.T) {
-	cases := []struct {
-		name      string
-		timeout   *int64
-		expectErr *apis.FieldError
-	}{{
-		name:    "exceed max timeout",
-		timeout: ptr.Int64(6000),
-		expectErr: apis.ErrOutOfBoundsValue(
-			6000, 0, config.DefaultMaxRevisionTimeoutSeconds,
-			"timeoutSeconds"),
-	}, {
-		name:    "valid timeout value",
-		timeout: ptr.Int64(100),
-	}}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			err := ValidateTimeoutSeconds(context.Background(), *c.timeout)
-			if got, want := err.Error(), c.expectErr.Error(); got != want {
-				t.Errorf("\nGot:  %q\nwant: %q", got, want)
-			}
-		})
-	}
-}
-
 func cfg(m map[string]string) *config.Config {
 	d, _ := config.NewDefaultsConfigFromMap(m)
 	return &config.Config{
@@ -420,7 +331,7 @@ func TestValidateClusterVisibilityLabel(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := ValidateClusterVisibilityLabel(test.label, network.VisibilityLabelKey)
+			err := validateClusterVisibilityLabel(test.label, network.VisibilityLabelKey)
 			if got, want := err.Error(), test.expectErr.Error(); got != want {
 				t.Errorf("\nGot:  %q\nwant: %q", got, want)
 			}
@@ -561,52 +472,44 @@ func TestAnnotationUpdate(t *testing.T) {
 	}
 }
 
-func TestValidateRevisionName(t *testing.T) {
-	cases := []struct {
-		name            string
-		revName         string
-		revGenerateName string
-		objectMeta      metav1.ObjectMeta
-		expectErr       *apis.FieldError
+func TestValidateRolloutDurationAnnotation(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
 	}{{
-		name:            "invalid revision generateName - dots",
-		revGenerateName: "foo.bar",
-		expectErr: apis.ErrInvalidValue("not a DNS 1035 label prefix: [a DNS-1035 label must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character (e.g. 'my-name',  or 'abc-123', regex used for validation is '[a-z]([-a-z0-9]*[a-z0-9])?')]",
-			"metadata.generateName"),
+		name: "empty",
 	}, {
-		name:    "invalid revision name - dots",
-		revName: "foo.bar",
-		expectErr: apis.ErrInvalidValue("not a DNS 1035 label: [a DNS-1035 label must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character (e.g. 'my-name',  or 'abc-123', regex used for validation is '[a-z]([-a-z0-9]*[a-z0-9])?')]",
-			"metadata.name"),
+		name:  "valid",
+		value: "120s",
 	}, {
-		name: "invalid name (not prefixed)",
-		objectMeta: metav1.ObjectMeta{
-			Name: "bar",
-		},
-		revName: "foo",
-		expectErr: apis.ErrInvalidValue(`"foo" must have prefix "bar-"`,
-			"metadata.name"),
+		name:  "fancy valid",
+		value: "3h15m21s",
 	}, {
-		name: "invalid name (with generateName)",
-		objectMeta: metav1.ObjectMeta{
-			GenerateName: "foo-bar-",
-		},
-		revName:   "foo-bar-foo",
-		expectErr: apis.ErrDisallowedFields("metadata.name"),
+		name:  "in ns",
+		value: "120000000000",
+		want:  "invalid value: 120000000000: serving.knative.dev/rolloutDuration",
 	}, {
-		name: "valid name",
-		objectMeta: metav1.ObjectMeta{
-			Name: "valid",
-		},
-		revName: "valid-name",
+		name:  "not a valid duration",
+		value: "five minutes and 6 seconds",
+		want:  "invalid value: five minutes and 6 seconds: serving.knative.dev/rolloutDuration",
+	}, {
+		name:  "negative",
+		value: "-211s",
+		want:  "rolloutDuration=-211s must be positive: serving.knative.dev/rolloutDuration",
+	}, {
+		name:  "too precise",
+		value: "211s44ms",
+		want:  "rolloutDuration=211s44ms is not at second precision: serving.knative.dev/rolloutDuration",
 	}}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			ctx := apis.WithinParent(context.Background(), c.objectMeta)
-			err := ValidateRevisionName(ctx, c.revName, c.revGenerateName)
-			if got, want := err.Error(), c.expectErr.Error(); got != want {
-				t.Errorf("\nGot:  %q\nwant: %q", got, want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRolloutDurationAnnotation(map[string]string{
+				RolloutDurationKey: tc.value,
+			})
+			if got, want := err.Error(), tc.want; got != want {
+				t.Errorf("APIErr mismatch, diff(-want,+got):\n%s", cmp.Diff(want, got))
 			}
 		})
 	}
