@@ -26,7 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	av1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
+	"knative.dev/pkg/logging/logkey"
+	autoscalingv1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/autoscaler/metrics"
 )
 
@@ -117,7 +118,7 @@ var invalidSR = ScaleResult{
 // UniScaler records statistics for a particular Decider and proposes the scale for the Decider's target based on those statistics.
 type UniScaler interface {
 	// Scale computes a scaling suggestion for a revision.
-	Scale(context.Context, time.Time) ScaleResult
+	Scale(*zap.SugaredLogger, time.Time) ScaleResult
 
 	// Update reconfigures the UniScaler according to the DeciderSpec.
 	Update(*DeciderSpec)
@@ -131,6 +132,7 @@ type scalerRunner struct {
 	scaler UniScaler
 	stopCh chan struct{}
 	pokeCh chan struct{}
+	logger *zap.SugaredLogger
 
 	// mux guards access to decider.
 	mux     sync.RWMutex
@@ -145,6 +147,13 @@ func (sr *scalerRunner) latestScale() int32 {
 
 func sameSign(a, b int32) bool {
 	return (a&math.MinInt32)^(b&math.MinInt32) == 0
+}
+
+// decider returns a thread safe deep copy of the owned decider.
+func (sr *scalerRunner) safeDecider() *Decider {
+	sr.mux.RLock()
+	defer sr.mux.RUnlock()
+	return sr.decider.DeepCopy()
 }
 
 func (sr *scalerRunner) updateLatestScale(sRes ScaleResult) bool {
@@ -207,31 +216,26 @@ func (m *MultiScaler) Get(_ context.Context, namespace, name string) (*Decider, 
 	scaler, exists := m.scalers[key]
 	if !exists {
 		// This GroupResource is a lie, but unfortunately this interface requires one.
-		return nil, errors.NewNotFound(av1alpha1.Resource("Deciders"), key.String())
+		return nil, errors.NewNotFound(autoscalingv1alpha1.Resource("Deciders"), key.String())
 	}
-	scaler.mux.RLock()
-	defer scaler.mux.RUnlock()
-	return scaler.decider.DeepCopy(), nil
+	return scaler.safeDecider(), nil
 }
 
 // Create instantiates the desired Decider.
-func (m *MultiScaler) Create(ctx context.Context, decider *Decider) (*Decider, error) {
+func (m *MultiScaler) Create(_ context.Context, decider *Decider) (*Decider, error) {
 	key := types.NamespacedName{Namespace: decider.Namespace, Name: decider.Name}
 	m.scalersMutex.Lock()
 	defer m.scalersMutex.Unlock()
 	scaler, exists := m.scalers[key]
 	if !exists {
 		var err error
-		scaler, err = m.createScaler(ctx, decider)
+		scaler, err = m.createScaler(decider, key)
 		if err != nil {
 			return nil, err
 		}
 		m.scalers[key] = scaler
 	}
-	scaler.mux.RLock()
-	defer scaler.mux.RUnlock()
-	// scaler.decider is already a copy of the original, so just return it.
-	return scaler.decider, nil
+	return scaler.safeDecider(), nil
 }
 
 // Update applies the desired DeciderSpec to a currently running Decider.
@@ -248,7 +252,7 @@ func (m *MultiScaler) Update(_ context.Context, decider *Decider) (*Decider, err
 		return decider, nil
 	}
 	// This GroupResource is a lie, but unfortunately this interface requires one.
-	return nil, errors.NewNotFound(av1alpha1.Resource("Deciders"), key.String())
+	return nil, errors.NewNotFound(autoscalingv1alpha1.Resource("Deciders"), key.String())
 }
 
 // Delete stops and removes a Decider.
@@ -285,8 +289,7 @@ func (m *MultiScaler) Inform(event types.NamespacedName) bool {
 	return false
 }
 
-func (m *MultiScaler) runScalerTicker(ctx context.Context, runner *scalerRunner) {
-	metricKey := types.NamespacedName{Namespace: runner.decider.Namespace, Name: runner.decider.Name}
+func (m *MultiScaler) runScalerTicker(runner *scalerRunner, metricKey types.NamespacedName) {
 	ticker := m.tickProvider(tickInterval)
 	go func() {
 		defer ticker.Stop()
@@ -297,15 +300,15 @@ func (m *MultiScaler) runScalerTicker(ctx context.Context, runner *scalerRunner)
 			case <-runner.stopCh:
 				return
 			case <-ticker.C:
-				m.tickScaler(ctx, runner.scaler, runner, metricKey)
+				m.tickScaler(runner.scaler, runner, metricKey)
 			case <-runner.pokeCh:
-				m.tickScaler(ctx, runner.scaler, runner, metricKey)
+				m.tickScaler(runner.scaler, runner, metricKey)
 			}
 		}
 	}()
 }
 
-func (m *MultiScaler) createScaler(ctx context.Context, decider *Decider) (*scalerRunner, error) {
+func (m *MultiScaler) createScaler(decider *Decider, key types.NamespacedName) (*scalerRunner, error) {
 	d := decider.DeepCopy()
 	scaler, err := m.uniScalerFactory(d)
 	if err != nil {
@@ -317,6 +320,7 @@ func (m *MultiScaler) createScaler(ctx context.Context, decider *Decider) (*scal
 		stopCh:  make(chan struct{}),
 		decider: d,
 		pokeCh:  make(chan struct{}),
+		logger:  m.logger.With(zap.String(logkey.Key, key.String())),
 	}
 	d.Status.DesiredScale = -1
 	switch tbc := d.Spec.TargetBurstCapacity; tbc {
@@ -328,12 +332,12 @@ func (m *MultiScaler) createScaler(ctx context.Context, decider *Decider) (*scal
 		d.Status.ExcessBurstCapacity = int32(float64(d.Spec.InitialScale)*d.Spec.TotalValue - tbc)
 	}
 
-	m.runScalerTicker(ctx, runner)
+	m.runScalerTicker(runner, key)
 	return runner, nil
 }
 
-func (m *MultiScaler) tickScaler(ctx context.Context, scaler UniScaler, runner *scalerRunner, metricKey types.NamespacedName) {
-	sr := scaler.Scale(ctx, time.Now())
+func (m *MultiScaler) tickScaler(scaler UniScaler, runner *scalerRunner, metricKey types.NamespacedName) {
+	sr := scaler.Scale(runner.logger, time.Now())
 
 	if !sr.ScaleValid {
 		return

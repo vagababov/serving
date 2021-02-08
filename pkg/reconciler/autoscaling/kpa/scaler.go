@@ -32,7 +32,7 @@ import (
 	"knative.dev/networking/pkg/prober"
 	pkgnet "knative.dev/pkg/network"
 	"knative.dev/serving/pkg/activator"
-	pav1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
+	autoscalingv1alpha1 "knative.dev/serving/pkg/apis/autoscaling/v1alpha1"
 	"knative.dev/serving/pkg/autoscaler/config/autoscalerconfig"
 	"knative.dev/serving/pkg/reconciler/autoscaling/config"
 	kparesources "knative.dev/serving/pkg/reconciler/autoscaling/kpa/resources"
@@ -40,8 +40,10 @@ import (
 	"knative.dev/serving/pkg/resources"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/tools/cache"
 )
 
 const (
@@ -78,12 +80,12 @@ type asyncProber interface {
 
 // scaler scales the target of a kpa-class PA up or down including scaling to zero.
 type scaler struct {
-	psInformerFactory duck.InformerFactory
-	dynamicClient     dynamic.Interface
-	transport         http.RoundTripper
+	listerFactory func(gvr schema.GroupVersionResource) (cache.GenericLister, error)
+	dynamicClient dynamic.Interface
+	transport     http.RoundTripper
 
 	// For sync probes.
-	activatorProbe func(pa *pav1alpha1.PodAutoscaler, transport http.RoundTripper) (bool, error)
+	activatorProbe func(pa *autoscalingv1alpha1.PodAutoscaler, transport http.RoundTripper) (bool, error)
 
 	// For async probes.
 	probeManager asyncProber
@@ -95,11 +97,16 @@ func newScaler(ctx context.Context, psInformerFactory duck.InformerFactory, enqu
 	logger := logging.FromContext(ctx)
 	transport := pkgnet.NewProberTransport()
 	ks := &scaler{
-		// Wrap it in a cache, so that we don't stamp out a new
-		// informer/lister each time.
-		psInformerFactory: psInformerFactory,
-		dynamicClient:     dynamicclient.Get(ctx),
-		transport:         transport,
+		dynamicClient: dynamicclient.Get(ctx),
+		transport:     transport,
+
+		// We wrap the PodScalable Informer Factory here so Get() uses the outer context.
+		// As the returned Informer is shared across reconciles, passing the context from
+		// an individual reconcile to Get() could lead to problems.
+		listerFactory: func(gvr schema.GroupVersionResource) (cache.GenericLister, error) {
+			_, l, err := psInformerFactory.Get(ctx, gvr)
+			return l, err
+		},
 
 		// Production setup uses the default probe implementation.
 		activatorProbe: activatorProbe,
@@ -114,7 +121,7 @@ func newScaler(ctx context.Context, psInformerFactory duck.InformerFactory, enqu
 }
 
 // Resolves the pa to the probing endpoint Eg. http://hostname:port/healthz
-func paToProbeTarget(pa *pav1alpha1.PodAutoscaler) string {
+func paToProbeTarget(pa *autoscalingv1alpha1.PodAutoscaler) string {
 	svc := pkgnet.GetServiceHostname(pa.Status.ServiceName, pa.Namespace)
 	port := networking.ServicePort(pa.Spec.ProtocolType)
 
@@ -123,7 +130,7 @@ func paToProbeTarget(pa *pav1alpha1.PodAutoscaler) string {
 
 // activatorProbe returns true if via probe it determines that the
 // PA is backed by the Activator.
-func activatorProbe(pa *pav1alpha1.PodAutoscaler, transport http.RoundTripper) (bool, error) {
+func activatorProbe(pa *autoscalingv1alpha1.PodAutoscaler, transport http.RoundTripper) (bool, error) {
 	// No service name -- no probe.
 	if pa.Status.ServiceName == "" {
 		return false, nil
@@ -131,7 +138,7 @@ func activatorProbe(pa *pav1alpha1.PodAutoscaler, transport http.RoundTripper) (
 	return prober.Do(context.Background(), transport, paToProbeTarget(pa), probeOptions...)
 }
 
-func lastPodRetention(pa *pav1alpha1.PodAutoscaler, cfg *autoscalerconfig.Config) time.Duration {
+func lastPodRetention(pa *autoscalingv1alpha1.PodAutoscaler, cfg *autoscalerconfig.Config) time.Duration {
 	d, ok := pa.ScaleToZeroPodRetention()
 	if ok {
 		return d
@@ -157,7 +164,7 @@ func durationMax(d1, d2 time.Duration) time.Duration {
 	return d1
 }
 
-func (ks *scaler) handleScaleToZero(ctx context.Context, pa *pav1alpha1.PodAutoscaler,
+func (ks *scaler) handleScaleToZero(ctx context.Context, pa *autoscalingv1alpha1.PodAutoscaler,
 	sks *nv1a1.ServerlessService, desiredScale int32) (int32, bool) {
 	if desiredScale != 0 {
 		return desiredScale, true
@@ -278,8 +285,8 @@ func (ks *scaler) handleScaleToZero(ctx context.Context, pa *pav1alpha1.PodAutos
 	}
 }
 
-func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, desiredScale int32,
-	ps *pav1alpha1.PodScalable) error {
+func (ks *scaler) applyScale(ctx context.Context, pa *autoscalingv1alpha1.PodAutoscaler, desiredScale int32,
+	ps *autoscalingv1alpha1.PodScalable) error {
 	logger := logging.FromContext(ctx)
 
 	gvr, name, err := resources.ScaleResourceArguments(pa.Spec.ScaleTargetRef)
@@ -309,7 +316,7 @@ func (ks *scaler) applyScale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, 
 }
 
 // scale attempts to scale the given PA's target reference to the desired scale.
-func (ks *scaler) scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, error) {
+func (ks *scaler) scale(ctx context.Context, pa *autoscalingv1alpha1.PodAutoscaler, sks *nv1a1.ServerlessService, desiredScale int32) (int32, error) {
 	asConfig := config.FromContext(ctx).Autoscaler
 	logger := logging.FromContext(ctx)
 
@@ -341,7 +348,7 @@ func (ks *scaler) scale(ctx context.Context, pa *pav1alpha1.PodAutoscaler, sks *
 		return desiredScale, nil
 	}
 
-	ps, err := resources.GetScaleResource(ctx, pa.Namespace, pa.Spec.ScaleTargetRef, ks.psInformerFactory)
+	ps, err := resources.GetScaleResource(pa.Namespace, pa.Spec.ScaleTargetRef, ks.listerFactory)
 	if err != nil {
 		return desiredScale, fmt.Errorf("failed to get scale target %v: %w", pa.Spec.ScaleTargetRef, err)
 	}

@@ -30,11 +30,13 @@ var stableTests = map[string]func(t *testing.T){
 	"grpc/split":                   TestGRPCSplit,
 	"headers/pre-split":            TestPreSplitSetHeaders,
 	"headers/post-split":           TestPostSplitSetHeaders,
+	"headers/probe":                TestProbeHeaders,
 	"hosts/multiple":               TestMultipleHosts,
 	"dispatch/path":                TestPath,
 	"dispatch/percentage":          TestPercentage,
 	"dispatch/path_and_percentage": TestPathAndPercentageSplit,
 	"dispatch/rule":                TestRule,
+	"retry":                        TestRetry,
 	"timeout":                      TestTimeout,
 	"tls":                          TestIngressTLS,
 	"update":                       TestUpdate,
@@ -48,13 +50,12 @@ var stableTests = map[string]func(t *testing.T){
 
 var betaTests = map[string]func(t *testing.T){
 	// Add your conformance test for beta features
-	"headers/probe": TestProbeHeaders,
-	"host-rewrite":  TestRewriteHost,
+	"host-rewrite": TestRewriteHost,
+	"headers/tags": TestTagHeaders,
 }
 
 var alphaTests = map[string]func(t *testing.T){
 	// Add your conformance test for alpha features
-	"headers/tags": TestTagHeaders,
 }
 
 // RunConformance will run ingress conformance tests

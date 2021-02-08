@@ -23,13 +23,12 @@ import (
 	"net/url"
 	"testing"
 
-	pkgTest "knative.dev/pkg/test"
+	pkgtest "knative.dev/pkg/test"
 	"knative.dev/pkg/test/spoof"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
+	rtesting "knative.dev/serving/pkg/testing/v1"
 	"knative.dev/serving/test"
 	v1test "knative.dev/serving/test/v1"
-
-	rtesting "knative.dev/serving/pkg/testing/v1"
 )
 
 func assertResourcesUpdatedWhenRevisionIsReady(t *testing.T, clients *test.Clients, names test.ResourceNames, url *url.URL, expectedGeneration, expectedText string) {
@@ -41,12 +40,12 @@ func assertResourcesUpdatedWhenRevisionIsReady(t *testing.T, clients *test.Clien
 	// TODO(#1178): Remove "Wait" from all checks below this point.
 	t.Log("Serves the expected data at the endpoint")
 
-	_, err := pkgTest.WaitForEndpointState(
+	_, err := pkgtest.WaitForEndpointState(
 		context.Background(),
 		clients.KubeClient,
 		t.Logf,
 		url,
-		v1test.RetryingRouteInconsistency(spoof.MatchesAllOf(spoof.IsStatusOK, pkgTest.EventuallyMatchesBody(expectedText))),
+		v1test.RetryingRouteInconsistency(spoof.MatchesAllOf(spoof.IsStatusOK, pkgtest.EventuallyMatchesBody(expectedText))),
 		"WaitForEndpointToServeText",
 		test.ServingFlags.ResolvableDomain,
 		test.AddRootCAtoTransport(context.Background(), t.Logf, clients, test.ServingFlags.HTTPS))
@@ -144,7 +143,7 @@ func TestRouteCreation(t *testing.T) {
 	defer test.AssertProberDefault(t, prober)
 
 	t.Log("Updating the Configuration to use a different image")
-	objects.Config, err = v1test.PatchConfig(t, clients, objects.Config, rtesting.WithConfigImage(pkgTest.ImagePath(test.PizzaPlanet2)))
+	objects.Config, err = v1test.PatchConfig(t, clients, objects.Config, withConfigImage(pkgtest.ImagePath(test.PizzaPlanet2)))
 	if err != nil {
 		t.Fatalf("Patch update for Configuration %s with new image %s failed: %v", names.Config, test.PizzaPlanet2, err)
 	}
@@ -156,4 +155,11 @@ func TestRouteCreation(t *testing.T) {
 	}
 
 	assertResourcesUpdatedWhenRevisionIsReady(t, clients, names, url, "2", test.PizzaPlanetText2)
+}
+
+// withConfigImage sets the container image to be the provided string.
+func withConfigImage(img string) rtesting.ConfigOption {
+	return func(cfg *v1.Configuration) {
+		cfg.Spec.Template.Spec.Containers[0].Image = img
+	}
 }

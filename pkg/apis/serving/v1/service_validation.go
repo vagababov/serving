@@ -34,6 +34,8 @@ func (s *Service) Validate(ctx context.Context) (errs *apis.FieldError) {
 	if !apis.IsInStatusUpdate(ctx) {
 		errs = errs.Also(serving.ValidateObjectMetadata(ctx, s.GetObjectMeta()))
 		errs = errs.Also(s.validateLabels().ViaField("labels"))
+		errs = errs.Also(serving.ValidateRolloutDurationAnnotation(
+			s.GetAnnotations()).ViaField("annotations"))
 		errs = errs.Also(serving.ValidateHasNoAutoscalingAnnotation(
 			s.GetAnnotations()).ViaField("annotations"))
 		errs = errs.ViaField("metadata")
@@ -73,5 +75,5 @@ func (s *Service) validateLabels() (errs *apis.FieldError) {
 			errs = errs.Also(apis.ErrInvalidKeyName(key, apis.CurrentField))
 		}
 	}
-	return
+	return errs
 }
