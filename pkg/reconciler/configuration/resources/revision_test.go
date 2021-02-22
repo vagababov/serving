@@ -24,17 +24,16 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/clock"
 
 	"knative.dev/pkg/ptr"
 	"knative.dev/serving/pkg/apis/serving"
 	v1 "knative.dev/serving/pkg/apis/serving/v1"
 )
 
-var fakeCurTime = time.Unix(1e9, 0)
+var fakeCurTime = time.Unix(1e9, 20102021)
 
 func TestMakeRevisions(t *testing.T) {
-	clock := clock.NewFakeClock(fakeCurTime)
+	tm := fakeCurTime
 
 	tests := []struct {
 		name          string
@@ -80,7 +79,7 @@ func TestMakeRevisions(t *testing.T) {
 					serving.ServiceLabelKey:                 "",
 				},
 				Annotations: map[string]string{
-					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(fakeCurTime),
 				},
 			},
 			Spec: v1.RevisionSpec{
@@ -122,7 +121,7 @@ func TestMakeRevisions(t *testing.T) {
 				Namespace: "with",
 				Name:      "labels-00100",
 				Annotations: map[string]string{
-					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(fakeCurTime),
 				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1.SchemeGroupVersion.String(),
@@ -194,7 +193,7 @@ func TestMakeRevisions(t *testing.T) {
 				Annotations: map[string]string{
 					"foo": "bar",
 					"baz": "blah",
-					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(fakeCurTime),
 				},
 			},
 			Spec: v1.RevisionSpec{
@@ -238,7 +237,7 @@ func TestMakeRevisions(t *testing.T) {
 				Annotations: map[string]string{
 					"serving.knative.dev/creator":             "someone",
 					serving.RoutesAnnotationKey:               "route",
-					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(fakeCurTime),
 				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1.SchemeGroupVersion.String(),
@@ -300,7 +299,7 @@ func TestMakeRevisions(t *testing.T) {
 					"serving.knative.dev/creator": "someone",
 					"foo":                         "bar",
 					"baz":                         "blah",
-					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(clock),
+					serving.RoutingStateModifiedAnnotationKey: v1.RoutingStateModifiedString(fakeCurTime),
 				},
 				OwnerReferences: []metav1.OwnerReference{{
 					APIVersion:         v1.SchemeGroupVersion.String(),
@@ -328,7 +327,7 @@ func TestMakeRevisions(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := MakeRevision(context.Background(), test.configuration, clock)
+			got := MakeRevision(context.Background(), test.configuration, tm)
 			if diff := cmp.Diff(test.want, got); diff != "" {
 				t.Error("MakeRevision (-want, +got) =", diff)
 			}

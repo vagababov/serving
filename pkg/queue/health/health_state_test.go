@@ -26,25 +26,25 @@ import (
 )
 
 func TestHealthStateSetsState(t *testing.T) {
-	s := &State{}
+	s := NewState()
 
 	wantAlive := func() {
-		if !s.IsAlive() {
+		if !s.isAlive() {
 			t.Error("State was not alive but it should have been alive")
 		}
 	}
 	wantNotAlive := func() {
-		if s.IsAlive() {
+		if s.isAlive() {
 			t.Error("State was alive but it shouldn't have been")
 		}
 	}
 	wantShuttingDown := func() {
-		if !s.IsShuttingDown() {
+		if !s.isShuttingDown() {
 			t.Error("State was not shutting down but it should have been")
 		}
 	}
 	wantNotShuttingDown := func() {
-		if s.IsShuttingDown() {
+		if s.isShuttingDown() {
 			t.Error("State was shutting down but it shouldn't have been")
 		}
 	}
@@ -64,99 +64,97 @@ func TestHealthStateSetsState(t *testing.T) {
 func TestHealthStateHealthHandler(t *testing.T) {
 	tests := []struct {
 		name         string
-		state        *State
+		alive        bool
+		shuttingDown bool
 		prober       func() bool
 		isAggressive bool
 		wantStatus   int
 		wantBody     string
 	}{{
 		name:         "alive: true, K-Probe",
-		state:        &State{alive: true},
+		alive:        true,
 		isAggressive: false,
 		wantStatus:   http.StatusOK,
 		wantBody:     queue.Name,
 	}, {
 		name:         "alive: false, prober: true, K-Probe",
-		state:        &State{alive: false},
 		prober:       func() bool { return true },
 		isAggressive: false,
 		wantStatus:   http.StatusOK,
 		wantBody:     queue.Name,
 	}, {
 		name:         "alive: false, prober: false, K-Probe",
-		state:        &State{alive: false},
 		prober:       func() bool { return false },
 		isAggressive: false,
 		wantStatus:   http.StatusServiceUnavailable,
 	}, {
 		name:         "alive: false, no prober, K-Probe",
-		state:        &State{alive: false},
 		isAggressive: false,
 		wantStatus:   http.StatusOK,
 		wantBody:     queue.Name,
 	}, {
 		name:         "shuttingDown: true, K-Probe",
-		state:        &State{shuttingDown: true},
+		shuttingDown: true,
 		isAggressive: false,
 		wantStatus:   http.StatusGone,
 	}, {
 		name:         "no prober, shuttingDown: false",
-		state:        &State{},
 		isAggressive: true,
 		wantStatus:   http.StatusOK,
 		wantBody:     queue.Name,
 	}, {
 		name:         "prober: true, shuttingDown: true",
-		state:        &State{shuttingDown: true},
+		shuttingDown: true,
 		prober:       func() bool { return true },
 		isAggressive: true,
 		wantStatus:   http.StatusGone,
 	}, {
 		name:         "prober: true, shuttingDown: false",
-		state:        &State{},
 		prober:       func() bool { return true },
 		isAggressive: true,
 		wantStatus:   http.StatusOK,
 		wantBody:     queue.Name,
 	}, {
 		name:         "prober: false, shuttingDown: false",
-		state:        &State{},
 		prober:       func() bool { return false },
 		isAggressive: true,
 		wantStatus:   http.StatusServiceUnavailable,
 	}, {
 		name:         "prober: false, shuttingDown: true",
-		state:        &State{},
+		shuttingDown: true,
 		prober:       func() bool { return false },
 		isAggressive: true,
-		wantStatus:   http.StatusServiceUnavailable,
+		wantStatus:   http.StatusGone,
 	}, {
 		name:         "alive: true, prober: false, shuttingDown: false",
-		state:        &State{alive: true},
+		alive:        true,
 		prober:       func() bool { return false },
 		isAggressive: true,
 		wantStatus:   http.StatusServiceUnavailable,
 	}}
+
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rr := httptest.NewRecorder()
-			test.state.HandleHealthProbe(test.prober, test.isAggressive, rr)
+			state := NewState()
+			state.alive = test.alive
+			state.shuttingDown = test.shuttingDown
 
-			if rr.Code != test.wantStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v",
-					rr.Code, test.wantStatus)
+			rr := httptest.NewRecorder()
+			state.HandleHealthProbe(test.prober, test.isAggressive, rr)
+
+			if got, want := rr.Code, test.wantStatus; got != want {
+				t.Errorf("handler returned wrong status code: got %v want %v", got, want)
 			}
 
-			if rr.Body.String() != test.wantBody {
-				t.Errorf("handler returned unexpected body: got %v want %v",
-					rr.Body.String(), test.wantBody)
+			if got, want := rr.Body.String(), test.wantBody; got != want {
+				t.Errorf("handler returned unexpected body: got %v want %v", got, want)
 			}
 		})
 	}
 }
 
 func TestHealthStateDrainHandler(t *testing.T) {
-	state := &State{}
+	state := NewState()
 	state.setAlive()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -178,10 +176,38 @@ func TestHealthStateDrainHandler(t *testing.T) {
 	}
 }
 
-func TestHealthStateShutdown(t *testing.T) {
-	state := &State{}
+func TestHealthStateDrainHandlerNotRacy(t *testing.T) {
+	state := NewState()
 	state.setAlive()
-	state.drainCh = make(chan struct{})
+
+	// Complete the drain _before_ the DrainHandlerFunc is attached.
+	state.drainFinished()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rr := httptest.NewRecorder()
+
+	completedCh := make(chan struct{}, 1)
+	handler := http.HandlerFunc(state.DrainHandlerFunc())
+	go func(handler http.Handler, recorder *httptest.ResponseRecorder) {
+		handler.ServeHTTP(recorder, req)
+		close(completedCh)
+	}(handler, rr)
+
+	select {
+	case <-completedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for drain handler to return")
+	}
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			rr.Code, http.StatusOK)
+	}
+}
+
+func TestHealthStateShutdown(t *testing.T) {
+	state := NewState()
+	state.setAlive()
 
 	calledCh := make(chan struct{}, 1)
 	state.Shutdown(func() {

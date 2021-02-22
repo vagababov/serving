@@ -56,6 +56,7 @@ var (
 )
 
 type reqOp struct {
+	id   int
 	op   int
 	time int
 	key  types.NamespacedName
@@ -276,18 +277,22 @@ func TestStats(t *testing.T) {
 	}, {
 		name: "interleaved requests",
 		ops: []reqOp{{
+			id:   1,
 			op:   requestOpStart,
 			key:  rev1,
 			time: 0,
 		}, {
+			id:   2,
 			op:   requestOpStart,
 			key:  rev1,
 			time: 0,
 		}, {
+			id:   2,
 			op:   requestOpEnd,
 			key:  rev1,
 			time: 1,
 		}, {
+			id:   1,
 			op:   requestOpEnd,
 			key:  rev1,
 			time: 2,
@@ -316,14 +321,19 @@ func TestStats(t *testing.T) {
 			cr, _, cancel := newTestReporter(t)
 			defer cancel()
 
+			// statCache simulates the stat being kept for the entire request and reused
+			// for the request being finished.
+			statCache := map[int]*revisionStats{}
+
 			// Apply request operations
 			for _, op := range tc.ops {
 				time := time.Time{}.Add(time.Duration(op.time) * time.Millisecond)
 				switch op.op {
 				case requestOpStart:
-					cr.handleEvent(network.ReqEvent{Key: op.key, Type: network.ReqIn, Time: time})
+					statCache[op.id] = cr.handleRequestIn(network.ReqEvent{Key: op.key, Type: network.ReqIn, Time: time})
 				case requestOpEnd:
-					cr.handleEvent(network.ReqEvent{Key: op.key, Type: network.ReqOut, Time: time})
+					cr.handleRequestOut(statCache[op.id], network.ReqEvent{Key: op.key, Type: network.ReqOut, Time: time})
+					delete(statCache, op.id)
 				case requestOpTick:
 					stats := cr.report(time)
 					if len(stats) > 0 {
@@ -380,9 +390,9 @@ func TestConcurrencyReporterRun(t *testing.T) {
 	}()
 
 	now := time.Time{}
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
 
 	reportCh <- now.Add(1)
 
@@ -460,6 +470,73 @@ func TestConcurrencyReporterHandler(t *testing.T) {
 	}
 }
 
+func TestConcurrencyReporterRace(t *testing.T) {
+	cr, _, cancel := newTestReporter(t)
+	defer cancel()
+
+	base := time.Now()
+
+	// 1. Request in: Creates the stat (first part of handleRequestIn)
+	eventIn := network.ReqEvent{
+		Time: base,
+		Type: network.ReqIn,
+		Key:  rev1,
+	}
+	stats, _ := cr.getOrCreateStat(eventIn)
+
+	// 2. Report (will remove the stat if not guarded correctly)
+	cr.report(base.Add(1 * time.Second))
+
+	// 3. HandleEvent (second part of handleEvent)
+	stats.stats.HandleEvent(eventIn)
+
+	// 4. Request out: Creates a new stat, now negative
+	cr.handleRequestOut(stats, network.ReqEvent{
+		Time: base.Add(2 * time.Second),
+		Type: network.ReqOut,
+		Key:  rev1,
+	})
+
+	// 5. A negative report (if buggy)
+	got := cr.report(base.Add(2 * time.Second))
+	want := []asmetrics.StatMessage{{
+		Key: rev1,
+		Stat: asmetrics.Stat{
+			AverageConcurrentRequests: 1,
+			RequestCount:              1,
+			PodName:                   activatorPodName,
+		},
+	}}
+	if !cmp.Equal(got, want) {
+		t.Error("Unexpected stats (-want +got):", cmp.Diff(want, got))
+	}
+
+	// 6. It continues to work correctly.
+	stats = cr.handleRequestIn(network.ReqEvent{
+		Time: base.Add(2500 * time.Millisecond),
+		Type: network.ReqIn,
+		Key:  rev1,
+	})
+	cr.handleRequestOut(stats, network.ReqEvent{
+		Time: base.Add(3 * time.Second),
+		Type: network.ReqOut,
+		Key:  rev1,
+	})
+
+	got = cr.report(base.Add(3 * time.Second))
+	want = []asmetrics.StatMessage{{
+		Key: rev1,
+		Stat: asmetrics.Stat{
+			AverageConcurrentRequests: 0.5,
+			RequestCount:              1,
+			PodName:                   activatorPodName,
+		},
+	}}
+	if !cmp.Equal(got, want) {
+		t.Error("Unexpected stats (-want +got):", cmp.Diff(want, got))
+	}
+}
+
 func TestMetricsReported(t *testing.T) {
 	reset()
 	cr, ctx, cancel := newTestReporter(t)
@@ -472,10 +549,10 @@ func TestMetricsReported(t *testing.T) {
 	}()
 
 	now := time.Time{}
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
-	cr.handleEvent(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
+	cr.handleRequestIn(network.ReqEvent{Key: rev1, Type: network.ReqIn, Time: now})
 
 	// Report
 	reportCh <- now.Add(1)
@@ -622,7 +699,7 @@ func BenchmarkConcurrencyReporterReport(b *testing.B) {
 				revisions.Informer().GetIndexer().Add(rev)
 
 				// Send a sample request for each revision to make sure it's reported.
-				cr.handleEvent(network.ReqEvent{
+				cr.handleRequestIn(network.ReqEvent{
 					Time: time.Now(),
 					Type: network.ReqIn,
 					Key:  key,

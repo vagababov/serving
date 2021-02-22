@@ -57,19 +57,17 @@ var revisionSpec = v1.RevisionSpec{
 	TimeoutSeconds: ptr.Int64(60),
 }
 
-var testCtx context.Context
-var testClock clock.Clock
+var (
+	testCtx   context.Context
+	testClock clock.PassiveClock
+)
 
 // This is heavily based on the way the OpenShift Ingress controller tests its reconciliation method.
 func TestReconcile(t *testing.T) {
-	testClock = clock.NewFakeClock(time.Now())
+	testClock = clock.NewFakePassiveClock(time.Now())
 	testCtx = context.Background()
-
-	test(t)
-}
-
-func test(t *testing.T) {
 	retryAttempted := false
+
 	now := testClock.Now()
 
 	table := TableTest{{
@@ -566,8 +564,8 @@ func cfg(name, namespace string, generation int64, co ...ConfigOption) *v1.Confi
 }
 
 func rev(name, namespace string, generation int64, ro ...RevisionOption) *v1.Revision {
-	r := resources.MakeRevision(testCtx, cfg(name, namespace, generation), testClock)
-	r.SetDefaults(context.Background())
+	r := resources.MakeRevision(testCtx, cfg(name, namespace, generation), testClock.Now())
+	r.SetDefaults(testCtx)
 	for _, opt := range ro {
 		opt(r)
 	}
